@@ -21,6 +21,7 @@ from mutagen.flac import FLAC, Picture
 import ujson as json
 import asyncio.subprocess as asp
 from common import utils
+import sys  # 已存在? modules顶部有traceback, time, but not sys. ensure imported
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -558,13 +559,48 @@ async def _ensure_script_download(url: str, force: bool = False) -> str | None:
     return None
 
 
+# ========= 辅助：定位 run_external.js =========
+
+
+def _locate_run_external_js() -> str | None:
+    """在不同运行/打包环境下定位 run_external.js 的实际路径。"""
+    candidates: list[str] = []
+    # 1) 当前工作目录（variable.workdir）
+    candidates.append(os.path.join(variable.workdir, 'run_external.js'))
+    # 2) 与本文件同级的上层目录（项目根目录）
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'run_external.js'))
+    # 3) PyInstaller 临时解压目录
+    if hasattr(sys, '_MEIPASS'):
+        candidates.append(os.path.join(sys._MEIPASS, 'run_external.js'))
+
+    for path in candidates:
+        if os.path.exists(path):
+            return os.path.abspath(path)
+
+    # 若仍未找到，尝试写入内嵌脚本
+    target_path = os.path.join(_ext_script_dir, 'run_external.js')
+    try:
+        with open(target_path, 'w', encoding='utf-8') as f:
+            f.write(_RUN_EXTERNAL_JS)
+        logger.info(f'run_external.js 已写入: {target_path}')
+        return target_path
+    except Exception as e:
+        logger.error(f'写入 run_external.js 失败: {e}')
+        return None
+
+
 async def _run_node_script(script_path: str, source: str, song_id: str, quality: str, info_dict: dict | None):
     """调用 node 子进程执行脚本，返回解析后的 JSON。"""
     try:
         info_json = json.dumps(info_dict or {}, ensure_ascii=False)
+        runner_js = _locate_run_external_js()
+        if runner_js is None:
+            logger.error('run_external.js 未找到，无法执行 external script')
+            return None
+
         cmd = [
             'node',
-            os.path.join(variable.workdir, 'run_external.js'),
+            runner_js,
             script_path,
             source,
             song_id,
@@ -627,3 +663,119 @@ async def refresh_external_scripts():
     for url in urls:
         await _ensure_script_download(url, force=True)
     logger.info('[externalScript] 外部脚本刷新完成')
+
+# ========= 内嵌 run_external.js 脚本内容 =========
+
+_RUN_EXTERNAL_JS = r"""
+// Node adapter for lx-music-api-server
+// Usage: node run_external.js <scriptPath> <source> <songId> <quality> <infoJson>
+// Outputs single-line JSON to stdout. Example: {"code":0,"data":"https://..."}
+
+const fs = require('fs');
+const path = require('path');
+
+if (process.argv.length < 7) {
+  console.log(JSON.stringify({ code: 2, msg: 'invalid args' }));
+  process.exit(0);
+}
+
+const [,, scriptPath, source, songId, quality, infoJson] = process.argv;
+let musicInfo;
+try {
+  musicInfo = JSON.parse(infoJson || '{}');
+} catch (e) {
+  musicInfo = {};
+}
+
+// ------------------------------------------------------------
+// 构造最小化的 LX 运行时
+// ------------------------------------------------------------
+const http = require('http');
+const https = require('https');
+
+function lxRequest(url, options = {}, cb) {
+  try {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.request(url, {
+      method: options.method || 'GET',
+      headers: options.headers || {},
+    }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => {
+        const bodyBuf = Buffer.concat(chunks);
+        let body;
+        try {
+          body = JSON.parse(bodyBuf.toString());
+        } catch {
+          body = bodyBuf.toString();
+        }
+        cb(null, { body, statusCode: res.statusCode, headers: res.headers });
+      });
+    });
+    req.on('error', err => cb(err));
+    if (options.body) req.write(options.body);
+    req.end();
+  } catch (err) {
+    cb(err);
+  }
+}
+
+const listeners = {};
+const EVENT_NAMES = {
+  request: 'request',
+  inited: 'inited',
+  updateAlert: 'updateAlert',
+};
+
+const lx = {
+  EVENT_NAMES,
+  env: 'server',
+  version: 'external',
+  request: lxRequest,
+  on: (name, cb) => { listeners[name] = cb; },
+  send: async (name, payload) => {
+    if (typeof listeners[name] === 'function') {
+      return await listeners[name](payload);
+    }
+  },
+  utils: {
+    buffer: {
+      from: (...args) => Buffer.from(...args),
+      bufToString: (buf, enc) => buf.toString(enc),
+    },
+  },
+};
+
+globalThis.lx = lx;
+
+// ------------------------------------------------------------
+// 加载外部脚本
+// ------------------------------------------------------------
+try {
+  require(path.resolve(scriptPath));
+} catch (e) {
+  console.log(JSON.stringify({ code: 2, msg: 'require script error: ' + e.message }));
+  process.exit(0);
+}
+
+(async () => {
+  try {
+    const result = await lx.send(lx.EVENT_NAMES.request, {
+      action: 'musicUrl',
+      source,
+      info: {
+        musicInfo: Object.assign({ songmid: songId, hash: songId }, musicInfo),
+        type: quality,
+      },
+    });
+    if (!result) {
+      console.log(JSON.stringify({ code: 2, msg: 'no result' }));
+    } else {
+      console.log(JSON.stringify({ code: 0, data: result }));
+    }
+  } catch (err) {
+    console.log(JSON.stringify({ code: 2, msg: err.message || String(err) }));
+  }
+})(); 
+"""
