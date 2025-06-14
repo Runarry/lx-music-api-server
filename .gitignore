@@ -48,3 +48,4 @@ lx-music-source-example.js
 dumprecord_*.txt
 
 venv
+cache_audio
