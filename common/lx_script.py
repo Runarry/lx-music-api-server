@@ -124,6 +124,18 @@ async def generate_script_response(request):
             updateMsg = config.read_config('common.download_config.updateMsg').format(updateUrl = updateUrl, url = url, key = request.query.get('key')).replace('\\n', '\n')
             return {'code': 0, 'msg': 'success', 'data': {'updateMsg': updateMsg, 'updateUrl': updateUrl}}, 200
     
+    # —— 注入 info 参数，使客户端在请求 url 时带上歌曲信息 ——
+    # 插入 infoPayload 行
+    r = r.replace(
+        "const songId = musicInfo.hash ?? musicInfo.songmid",
+        "const songId = musicInfo.hash ?? musicInfo.songmid\n  const infoPayload = utils.buffer.bufToString(utils.buffer.from(JSON.stringify(musicInfo)), 'base64').replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/, '')"
+    )
+    # 替换 url，附加 info 参数
+    r = r.replace(
+        "`${API_URL}/url/${source}/${songId}/${quality}`",
+        "`${API_URL}/url/${source}/${songId}/${quality}?info=${infoPayload}`"
+    )
+    
     return Response(text = r, content_type = 'text/javascript',
                     headers = {
                         'Content-Disposition': f'''attachment; filename={

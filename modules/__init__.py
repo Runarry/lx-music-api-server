@@ -15,6 +15,10 @@ import os
 import glob
 import asyncio
 from common import variable
+import mutagen
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, USLT, APIC
+from mutagen.flac import FLAC, Picture
+import ujson as json
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -56,6 +60,46 @@ if not os.path.exists(_remote_cache_dir):
         logger.error(f"无法创建远端音频缓存目录: {_remote_cache_dir}")
 
 async def url(source, songId, quality, query={}):
+    # —— 优先处理客户端内嵌的 info / lyric 缓存 ——
+    try:
+        if query:
+            # decode helper
+            def _decode_b64url(data_str: str):
+                """Return python object from base64url-encoded json string."""
+                from common import utils
+                # 恢复标准 base64
+                padding = '=' * (-len(data_str) % 4)
+                data_str_std = data_str.replace('-', '+').replace('_', '/') + padding
+                raw_bytes = utils.createBase64Decode(data_str_std)
+                try:
+                    return json.loads(raw_bytes.decode('utf-8'))
+                except Exception:
+                    # 若解析失败返回 None
+                    return None
+            # 信息缓存
+            if 'info' in query and query['info']:
+                info_obj = _decode_b64url(query['info'])
+                if isinstance(info_obj, dict):
+                    config.updateCache(
+                        'info', f"{source}_{songId}",
+                        {"expire": False, "time": 0, "data": info_obj}
+                    )
+                    logger.debug(f"inline info cached: {source}_{songId}")
+            # 歌词缓存
+            if 'lyric' in query and query['lyric']:
+                lyric_obj = _decode_b64url(query['lyric'])
+                if lyric_obj:
+                    expire_time = 86400 * 3
+                    expire_at = int(time.time() + expire_time)
+                    config.updateCache(
+                        'lyric', f"{source}_{songId}",
+                        {"expire": True, "time": expire_at, "data": lyric_obj},
+                        expire_time,
+                    )
+                    logger.debug(f"inline lyric cached: {source}_{songId}")
+    except Exception:
+        logger.debug('decode inline metadata failed\n' + traceback.format_exc())
+
     if not quality:
         return {
             "code": 2,
@@ -137,7 +181,7 @@ async def url(source, songId, quality, query={}):
                 cache_filename = f"{source}_{songId}_{result['quality']}{_ext}"
                 cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
                 if not os.path.exists(cache_filepath):
-                    asyncio.create_task(_download_audio_to_cache(result["url"], cache_filepath))
+                    asyncio.create_task(_download_audio_to_cache(result["url"], cache_filepath, source, songId))
                 # 并行缓存歌曲信息/封面/歌词
                 asyncio.create_task(_ensure_metadata_cached(source, songId))
         except Exception:
@@ -276,8 +320,8 @@ async def other(method, source, songid, _, query):
 async def info_with_query(source, songid, _, query):
     return await other("info", source, songid, None)
 
-async def _download_audio_to_cache(url: str, filepath: str):
-    """后台下载音频文件到本地缓存，不抛出异常。"""
+async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id: str):
+    """后台下载音频文件到本地缓存，并在完成后写入元数据。"""
     if os.path.exists(filepath):
         return
     try:
@@ -287,10 +331,65 @@ async def _download_audio_to_cache(url: str, filepath: str):
                     async for chunk in resp.content.iter_chunked(1024 * 64):
                         f.write(chunk)
                 logger.info(f"音频缓存完成: {filepath}")
+
+                # 下载完成后嵌入元数据（若可用）
+                try:
+                    info_cache = config.getCache("info", f"{source}_{song_id}")
+                    info_data = info_cache["data"] if info_cache else None
+                    lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
+                    lyric_data = lyric_cache["data"] if lyric_cache else None
+                    cover_path = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
+                    _embed_metadata(filepath, info_data, cover_path if os.path.exists(cover_path) else None, lyric_data)
+                except Exception:
+                    logger.debug("写入元数据失败\n" + traceback.format_exc())
             else:
                 logger.warning(f"下载音频失败({resp.status}): {url}")
     except Exception:
         logger.warning(f"下载音频异常: {url}\n" + traceback.format_exc())
+
+def _embed_metadata(filepath: str, info: dict | None, cover_path: str | None, lyric_content: str | None):
+    """将歌曲信息、歌词、封面写入音频文件元数据。支持 mp3 / flac。"""
+    if not info:
+        return
+    try:
+        logger.debug(f"[meta] embedding tags into {os.path.basename(filepath)}")
+        if filepath.lower().endswith('.mp3'):
+            try:
+                audio = ID3(filepath)
+            except mutagen.id3.ID3NoHeaderError:
+                audio = ID3()
+            # 标题、艺术家、专辑
+            audio.add(TIT2(encoding=3, text=info.get('name') or info.get('name_ori', '')))
+            audio.add(TPE1(encoding=3, text=info.get('singer', '')))
+            audio.add(TALB(encoding=3, text=info.get('album', '')))
+            # 歌词
+            if lyric_content:
+                audio.add(USLT(encoding=3, text=lyric_content))
+            # 封面
+            if cover_path and os.path.exists(cover_path):
+                with open(cover_path, 'rb') as img_f:
+                    audio.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=img_f.read()))
+            audio.save(filepath)
+        elif filepath.lower().endswith('.flac'):
+            audio = FLAC(filepath)
+            audio['title'] = info.get('name') or info.get('name_ori', '')
+            audio['artist'] = info.get('singer', '')
+            audio['album'] = info.get('album', '')
+            # 歌词
+            if lyric_content:
+                audio['lyrics'] = lyric_content
+            # 封面
+            if cover_path and os.path.exists(cover_path):
+                pic = Picture()
+                with open(cover_path, 'rb') as img_f:
+                    pic.data = img_f.read()
+                pic.type = 3
+                pic.mime = 'image/jpeg'
+                audio.clear_pictures()
+                audio.add_picture(pic)
+            audio.save()
+    except Exception:
+        logger.debug("embed metadata error\n" + traceback.format_exc())
 
 # Helper to build cache file path based on naming rule
 def _find_cached_file(source: str, song_id: str, quality: str):
@@ -351,3 +450,20 @@ async def _ensure_metadata_cached(source: str, song_id: str):
                     logger.debug(f"下载封面失败: {cover_url}\n" + traceback.format_exc())
     except Exception:
         logger.warning("缓存 metadata 发生异常\n" + traceback.format_exc())
+
+    # —— 尝试把元数据写入已存在的缓存音频 ——
+    try:
+        for file_path in glob.glob(os.path.join(_remote_cache_dir, f"{source}_{song_id}_*.*")):
+            if file_path.endswith('_cover.jpg'):
+                continue
+            info_cache = config.getCache("info", f"{source}_{song_id}")
+            info_data = info_cache["data"] if info_cache else None
+            lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
+            lyric_data = lyric_cache["data"] if lyric_cache else None
+            cover_file = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
+            if not info_data:
+                logger.debug(f"[meta] info still missing for {source}_{song_id}")
+                continue
+            _embed_metadata(file_path, info_data, cover_file if os.path.exists(cover_file) else None, lyric_data)
+    except Exception:
+        logger.debug("embed metadata post-process error\n" + traceback.format_exc())
