@@ -572,18 +572,27 @@ async def _run_node_script(script_path: str, source: str, song_id: str, quality:
 
 
 async def _try_external_script(source: str, song_id: str, quality: str):
-    """遍历配置的外部脚本，尝试获取播放链接。"""
+    """遍历配置的外部脚本，尝试获取播放链接，并输出详细日志。"""
     urls: list[str] = config.read_config('common.external_scripts.urls') or []
     if not urls:
+        logger.info('[externalScript] external_scripts.urls 未配置，跳过')
         return None
     for url in urls:
+        logger.info(f"[externalScript] 尝试脚本来源: {url}")
         local_path = await _ensure_script_download(url)
         if not local_path:
+            logger.info(f"[externalScript] 下载失败/跳过: {url}")
             continue
+        logger.info(f"[externalScript] 执行脚本文件: {local_path}")
         result = await _run_node_script(local_path, source, song_id, quality, {'songmid': song_id, 'hash': song_id})
+        logger.info(f"[externalScript] 脚本返回: {result}")
         if result and isinstance(result, dict) and result.get('code') == 0 and result.get('data'):
+            logger.info(f"[externalScript] 获取成功 --> {result['data']}")
             return {
                 'url': result['data'],
                 'quality': result.get('quality', quality),
             }
+        else:
+            logger.info('[externalScript] 未得到有效结果，继续下一个脚本')
+    logger.info('[externalScript] 所有脚本尝试失败')
     return None
