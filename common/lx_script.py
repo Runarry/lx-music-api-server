@@ -103,10 +103,8 @@ async def generate_script_response(request):
     
     # 根据 module.{source}.enable 过滤掉已禁用的平台
     full_quality_conf = config.read_config("common.download_config.quality") or {}
-    filtered_quality_conf = {
-        k: v for k, v in full_quality_conf.items()
-        if config.read_config(f"module.{k}.enable") is True
-    }
+    # 不再过滤渠道，全部下发
+    filtered_quality_conf = full_quality_conf
     r = re.sub(r'const MUSIC_QUALITY = {[^}]+}', f'const MUSIC_QUALITY = JSON.parse(\'{json.dumps(filtered_quality_conf)}\')', r)
     
     # 修复当服务器返回相对路径(/cache/xxx)时，前端拼接 API_URL

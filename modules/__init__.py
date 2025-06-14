@@ -19,6 +19,8 @@ import mutagen
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, USLT, APIC
 from mutagen.flac import FLAC, Picture
 import ujson as json
+import asyncio.subprocess as asp
+from common import utils
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -223,11 +225,52 @@ async def url(source, songId, quality, query={}):
             },
         }
     except FailedException as e:
-        logger.info(f"获取{source}_{songId}_{quality}失败，原因：" + e.args[0])
+        logger.info(f"获取{source}_{songId}_{quality}失败，尝试 external script，原因：" + e.args[0])
+
+        # —— external script fallback ——
+        ext_res = await _try_external_script(source, songId, quality)
+        if ext_res:
+            logger.info(f"external script 获取成功: {ext_res['url']}")
+
+            # 后台缓存音频
+            try:
+                if config.read_config('common.remote_cache.enable') is not False:
+                    _ext = os.path.splitext(ext_res['url'].split('?')[0])[1] or '.mp3'
+                    cache_filename = f"{source}_{songId}_{ext_res['quality']}{_ext}"
+                    cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
+                    if not os.path.exists(cache_filepath):
+                        asyncio.create_task(_download_audio_to_cache(ext_res['url'], cache_filepath, source, songId))
+            except Exception:
+                logger.warning('音频缓存调度失败(来自 external script)\n' + traceback.format_exc())
+
+            # 写入 URL 缓存（不过期）
+            config.updateCache('urls', f"{source}_{songId}_{quality}", {'expire': False, 'time': 0, 'url': ext_res['url']})
+
+            asyncio.create_task(_ensure_metadata_cached(source, songId))
+
+            return {
+                'code': 0,
+                'msg': 'success',
+                'data': ext_res['url'],
+                'extra': {
+                    'cache': False,
+                    'quality': {
+                        'target': quality,
+                        'result': ext_res['quality'],
+                    },
+                    'expire': {
+                        'time': None,
+                        'canExpire': False,
+                    },
+                    'localfile': False,
+                    'fallback': 'externalScript',
+                },
+            }
+
         return {
-            "code": 2,
-            "msg": e.args[0],
-            "data": None,
+            'code': 2,
+            'msg': e.args[0],
+            'data': None,
         }
 
 
@@ -467,3 +510,80 @@ async def _ensure_metadata_cached(source: str, song_id: str):
             _embed_metadata(file_path, info_data, cover_file if os.path.exists(cover_file) else None, lyric_data)
     except Exception:
         logger.debug("embed metadata post-process error\n" + traceback.format_exc())
+
+# ================= 外部 lx-music-source.js 脚本支持 =================
+# 目录 ./external_scripts 用于缓存下载的脚本文件
+_ext_script_dir = os.path.join(variable.workdir, 'external_scripts')
+os.makedirs(_ext_script_dir, exist_ok=True)
+
+
+async def _ensure_script_download(url: str) -> str | None:
+    """若脚本不存在则下载，返回本地文件路径。"""
+    filename = utils.createMD5(url.encode()) + '.js'
+    filepath = os.path.join(_ext_script_dir, filename)
+    if os.path.exists(filepath):
+        return filepath
+    try:
+        async with variable.aioSession.get(url, timeout=20) as resp:
+            if resp.status == 200:
+                with open(filepath, 'wb') as f:
+                    async for chunk in resp.content.iter_chunked(8192):
+                        f.write(chunk)
+                logger.info(f"external script downloaded: {url} -> {filepath}")
+                return filepath
+            else:
+                logger.warning(f"download script failed({resp.status}): {url}")
+    except Exception:
+        logger.warning(f"download script exception: {url}\n" + traceback.format_exc())
+    return None
+
+
+async def _run_node_script(script_path: str, source: str, song_id: str, quality: str, info_dict: dict | None):
+    """调用 node 子进程执行脚本，返回解析后的 JSON。"""
+    try:
+        info_json = json.dumps(info_dict or {}, ensure_ascii=False)
+        cmd = [
+            'node',
+            os.path.join(variable.workdir, 'run_external.js'),
+            script_path,
+            source,
+            song_id,
+            quality,
+            info_json,
+        ]
+        proc = await asp.create_subprocess_exec(*cmd, stdout=asp.PIPE, stderr=asp.PIPE)
+        stdout, stderr = await proc.communicate()
+        if stderr:
+            logger.debug(f"external script stderr: {stderr.decode(errors='ignore')}")
+        if stdout:
+            try:
+                # 取最后一行非空文本
+                lines = stdout.decode(errors='ignore').strip().split('\n')
+                out_json = json.loads(lines[-1])
+                return out_json
+            except Exception:
+                logger.debug("parse external script output failed\n" + traceback.format_exc())
+        return None
+    except FileNotFoundError:
+        logger.error('Node.js 未安装或未在 PATH 中，无法使用 external script fallback')
+    except Exception:
+        logger.debug('run node script error\n' + traceback.format_exc())
+    return None
+
+
+async def _try_external_script(source: str, song_id: str, quality: str):
+    """遍历配置的外部脚本，尝试获取播放链接。"""
+    urls: list[str] = config.read_config('common.external_scripts.urls') or []
+    if not urls:
+        return None
+    for url in urls:
+        local_path = await _ensure_script_download(url)
+        if not local_path:
+            continue
+        result = await _run_node_script(local_path, source, song_id, quality, {'songmid': song_id, 'hash': song_id})
+        if result and isinstance(result, dict) and result.get('code') == 0 and result.get('data'):
+            return {
+                'url': result['data'],
+                'quality': result.get('quality', quality),
+            }
+    return None
