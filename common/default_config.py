@@ -51,6 +51,10 @@ common:
   local_music: # 服务器侧本地音乐相关配置，如果需要使用此功能请确保你的带宽足够
     audio_path: ./audio
     temp_path: ./temp
+  # 远端音频缓存配置（新增）
+  remote_cache:
+    enable: true           # 是否开启远端音频下载缓存
+    path: ./cache_audio    # 缓存文件保存目录
   # 缓存配置
   cache:
     # 适配器 [redis,sql]

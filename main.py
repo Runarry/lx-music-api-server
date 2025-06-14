@@ -214,15 +214,26 @@ async def handle_local(request):
             'data': localMusic.checkLocalMusic(data['p'])
         }
 
+# 音频缓存文件访问
+async def handle_cache_file(request):
+    filename = request.match_info.get('filename')
+    cache_dir = config.read_config('common.remote_cache.path') or './cache_audio'
+    path = os.path.join(cache_dir, filename)
+    if os.path.exists(path):
+        return FileResponse(path)
+    return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
+
 app = Application(middlewares=[handle_before_request])
 utils.setGlobal(app, "app")
 
-# mainpage
+# 缓存文件访问路由需要放在通配符路由之前
 app.router.add_get('/', main)
+app.router.add_get('/cache/{filename}', handle_cache_file)
 
-# api
+# 动态 API 路由
 app.router.add_get('/{method}/{source}/{songId}/{quality}', handle)
 app.router.add_get('/{method}/{source}/{songId}', handle)
+
 app.router.add_get('/local/{type}', handle_local)
 
 if (config.read_config('common.allow_download_script')):

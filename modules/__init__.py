@@ -11,6 +11,10 @@ from common.exceptions import FailedException
 from common.utils import require
 from common import log
 from common import config
+import os
+import glob
+import asyncio
+from common import variable
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -43,6 +47,13 @@ sourceExpirationTime = {
     },
 }
 
+# 初始化远端音频缓存目录
+_remote_cache_dir = config.read_config("common.remote_cache.path") or "./cache_audio"
+if not os.path.exists(_remote_cache_dir):
+    try:
+        os.makedirs(_remote_cache_dir, exist_ok=True)
+    except Exception:
+        logger.error(f"无法创建远端音频缓存目录: {_remote_cache_dir}")
 
 async def url(source, songId, quality, query={}):
     if not quality:
@@ -50,6 +61,24 @@ async def url(source, songId, quality, query={}):
             "code": 2,
             "msg": '需要参数"quality"',
             "data": None,
+        }
+
+    # —— 本地音频缓存预检查 ——
+    cached_path = _find_cached_file(source, songId, quality)
+    if cached_path:
+        logger.debug(f"命中本地音频缓存: {cached_path}")
+        return {
+            "code": 0,
+            "msg": "success",
+            "data": f"/cache/{os.path.basename(cached_path)}",
+            "extra": {
+                "cache": True,
+                "quality": {
+                    "target": quality,
+                    "result": quality,
+                },
+                "localfile": True,
+            },
         }
 
     if source == "kg":
@@ -94,6 +123,20 @@ async def url(source, songId, quality, query={}):
         result = await func(songId, quality)
         logger.info(f'获取{source}_{songId}_{quality}成功，URL：{result["url"]}')
 
+        # —— 下载音频以供下次使用 ——
+        try:
+            if config.read_config("common.remote_cache.enable") is not False:
+                # 取文件扩展名
+                _ext = os.path.splitext(result["url"].split("?")[0])[1]
+                if _ext == "":
+                    _ext = ".mp3"
+                cache_filename = f"{source}_{songId}_{result['quality']}{_ext}"
+                cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
+                if not os.path.exists(cache_filepath):
+                    asyncio.create_task(_download_audio_to_cache(result["url"], cache_filepath))
+        except Exception:
+            logger.warning("音频缓存调度失败\n" + traceback.format_exc())
+
         canExpire = sourceExpirationTime[source]["expire"]
         expireTime = int(sourceExpirationTime[source]["time"] * 0.75)
         expireAt = int(expireTime + time.time())
@@ -124,6 +167,7 @@ async def url(source, songId, quality, query={}):
                     "time": expireAt if canExpire else None,
                     "canExpire": canExpire,
                 },
+                "localfile": False,
             },
         }
     except FailedException as e:
@@ -213,3 +257,25 @@ async def other(method, source, songid, _, query):
 
 async def info_with_query(source, songid, _, query):
     return await other("info", source, songid, None)
+
+async def _download_audio_to_cache(url: str, filepath: str):
+    """后台下载音频文件到本地缓存，不抛出异常。"""
+    if os.path.exists(filepath):
+        return
+    try:
+        async with variable.aioSession.get(url, timeout=120) as resp:
+            if resp.status == 200:
+                with open(filepath, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(1024 * 64):
+                        f.write(chunk)
+                logger.info(f"音频缓存完成: {filepath}")
+            else:
+                logger.warning(f"下载音频失败({resp.status}): {url}")
+    except Exception:
+        logger.warning(f"下载音频异常: {url}\n" + traceback.format_exc())
+
+# Helper to build cache file path based on naming rule
+def _find_cached_file(source: str, song_id: str, quality: str):
+    pattern = f"{source}_{song_id}_{quality}.*"
+    files = glob.glob(os.path.join(_remote_cache_dir, pattern))
+    return files[0] if files else None
