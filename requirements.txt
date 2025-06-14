@@ -12,3 +12,4 @@ colorama
 ruamel-yaml
 redis
 hiredis
+pystray

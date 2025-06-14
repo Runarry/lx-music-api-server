@@ -359,10 +359,24 @@ async def initMain():
 if __name__ == "__main__":
     try:
         start_checkcn_thread()
-        asyncio.run(initMain())
+        # 初始化自定义事件循环以便托盘线程可以优雅关闭服务器
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # 动态获取一个用于展示的 host / port（选第一个即可）
+        try:
+            if sys.platform.startswith('win'):
+                from tray import start_tray_background
+                start_tray_background(loop)
+            else:
+                logger.info('检测到非 Windows 系统，已跳过托盘功能')
+        except Exception as e:
+            logger.warning(f"托盘启动失败: {e}")
+
+        loop.run_until_complete(initMain())
     except KeyboardInterrupt:
         pass
-    except:
+    except Exception:
         logger.critical('初始化出错，请检查日志')
         logger.critical(traceback.format_exc())
         with open('dumprecord_{}.txt'.format(int(time.time())), 'w', encoding='utf-8') as f:
