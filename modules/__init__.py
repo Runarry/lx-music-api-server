@@ -62,6 +62,11 @@ if not os.path.exists(_remote_cache_dir):
         logger.error(f"无法创建远端音频缓存目录: {_remote_cache_dir}")
 
 async def url(source, songId, quality, query={}):
+    # ❗ 为保证酷狗(Kugou)源的歌曲 ID 与磁盘/缓存中的命名一致，统一转为小写。
+    #   之前的实现是在本地文件检查之后才转换，导致相同歌曲无法命中缓存。
+    if source == "kg":
+        songId = songId.lower()
+
     # —— 优先处理客户端内嵌的 info / lyric 缓存 ——
     try:
         if query:
@@ -128,9 +133,6 @@ async def url(source, songId, quality, query={}):
                 "localfile": True,
             },
         }
-
-    if source == "kg":
-        songId = songId.lower()
 
     try:
         cache = config.getCache("urls", f"{source}_{songId}_{quality}")
@@ -436,8 +438,15 @@ def _embed_metadata(filepath: str, info: dict | None, cover_path: str | None, ly
 
 # Helper to build cache file path based on naming rule
 def _find_cached_file(source: str, song_id: str, quality: str):
-    pattern = f"{source}_{song_id}_{quality}.*"
-    files = glob.glob(os.path.join(_remote_cache_dir, pattern))
+    # 先尝试精准匹配 quality，如未命中则回退到任意质量文件
+    pattern_exact = f"{source}_{song_id}_{quality}.*"
+    files = glob.glob(os.path.join(_remote_cache_dir, pattern_exact))
+    if files:
+        return files[0]
+
+    # 回退：只要找到同一首歌任意清晰度的文件即可
+    pattern_any = f"{source}_{song_id}_*.*"
+    files = glob.glob(os.path.join(_remote_cache_dir, pattern_any))
     return files[0] if files else None
 
 # —— 额外信息、歌词、封面缓存 ——
