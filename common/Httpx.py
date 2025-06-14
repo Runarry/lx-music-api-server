@@ -209,6 +209,22 @@ def checkcn():
         logger.warning(traceback.format_exc())
 
 
+async def checkcn_async():
+    try:
+        req = await AsyncRequest("https://mips.kugou.com/check/iscn?&format=json")
+        body = utils.CreateObject(req.json())
+        variable.iscn = bool(body.flag)
+        if not variable.iscn:
+            variable.fakeip = config.read_config("common.fakeip")
+            logger.info(f"您在非中国大陆服务器({body.country})上启动了项目，已自动开启ip伪装")
+            logger.warning(
+                "此方式无法解决咪咕音乐的链接获取问题，您可以配置代理，服务器地址可在下方链接中找到\nhttps://hidemy.io/cn/proxy-list/?country=CN#list"
+            )
+    except Exception as e:
+        logger.warning("检查服务器位置失败，已忽略")
+        logger.warning(traceback.format_exc())
+
+
 class ClientResponse:
     # 这个类为了方便aiohttp响应与requests响应的跨类使用，也为了解决pickle无法缓存的问题
     def __init__(self, status, content, headers):

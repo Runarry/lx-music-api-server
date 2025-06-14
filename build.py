@@ -106,6 +106,8 @@ def build_test(fileName):
                               '-F',
                               '-i',
                               'res/icon.ico',
+                              '--add-data',
+                              'res;res',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{sha}',
                               'main.py'])
@@ -141,6 +143,8 @@ def build_release(fileName = ''):
                               '-F',
                               '-i',
                               'res/icon.ico',
+                              '--add-data',
+                              'res;res',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{vername}',
                               'main.py'])

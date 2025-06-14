@@ -32,6 +32,7 @@ from common import config, localMusic
 from common import lxsecurity
 from common import log
 from common import Httpx
+from common.Httpx import checkcn_async
 from common import variable
 from common import scheduler
 from common import lx_script
@@ -59,9 +60,6 @@ if sys.version_info < (3, 8):
 else:
     stopEvent = asyncio.exceptions.CancelledError
 
-
-def start_checkcn_thread() -> None:
-    threading.Thread(target=Httpx.checkcn).start()
 
 # check request info before start
 
@@ -331,6 +329,7 @@ async def run_app():
 async def initMain():
     await scheduler.run()
     variable.aioSession = aiohttp.ClientSession(trust_env=True)
+    asyncio.create_task(checkcn_async())
     try:
         await modules.refresh_external_scripts()
     except Exception:
@@ -357,8 +356,21 @@ async def initMain():
         logger.info("Server stopped")
 
 if __name__ == "__main__":
+    def disable_quick_edit_mode():
+        if sys.platform.startswith('win'):
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                h_stdin = kernel32.GetStdHandle(-10)
+                mode = ctypes.c_uint32()
+                kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode))
+                new_mode = (mode.value & ~0x0040) | 0x0080
+                kernel32.SetConsoleMode(h_stdin, new_mode)
+            except Exception as e:
+                logger.warning(f"禁用快速编辑模式失败: {e}")
+
     try:
-        start_checkcn_thread()
+        disable_quick_edit_mode()
         # 初始化自定义事件循环以便托盘线程可以优雅关闭服务器
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
