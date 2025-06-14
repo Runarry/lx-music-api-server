@@ -92,7 +92,7 @@ async def generate_script_response(request):
         elif (line.startswith("* @author")):
             newScriptLines.append(" * @author " + config.read_config("common.download_config.author"))
         elif (line.startswith("* @version")):
-            newScriptLines.append(" * @version " + config.read_config("common.download_config.version"))
+            newScriptLines.append(" * @version " + str(config.read_config("common.download_config.version")))
         elif (line.startswith("const DEV_ENABLE ")):
             newScriptLines.append("const DEV_ENABLE = " + str(config.read_config("common.download_config.dev")).lower())
         elif (line.startswith("const UPDATE_ENABLE ")):
