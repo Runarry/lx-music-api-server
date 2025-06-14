@@ -1,11 +1,12 @@
 name: Build Release
 
-on: 
+on:
   push:
     branches: [dev]
     paths-ignore:
       - '**.md'
       - '.gitignore'
+  workflow_dispatch:
 
 permissions:
   contents: write
