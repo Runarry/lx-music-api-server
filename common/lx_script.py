@@ -109,6 +109,9 @@ async def generate_script_response(request):
     }
     r = re.sub(r'const MUSIC_QUALITY = {[^}]+}', f'const MUSIC_QUALITY = JSON.parse(\'{json.dumps(filtered_quality_conf)}\')', r)
     
+    # 修复当服务器返回相对路径(/cache/xxx)时，前端拼接 API_URL
+    r = r.replace('return body.data', "return body.data.startsWith('http') ? body.data : `${API_URL}${body.data}`")
+    
     # 用于检查更新
     if (config.read_config("common.download_config.update")):
         md5 = createMD5(r)
