@@ -241,7 +241,8 @@ async def url(source, songId, quality, query={}):
                     cache_filename = f"{source}_{songId}_{ext_res['quality']}{_ext}"
                     cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
                     if not os.path.exists(cache_filepath):
-                        asyncio.create_task(_download_audio_to_cache(ext_res['url'], cache_filepath, source, songId))
+                        # 对 external script 返回的音频进行同步缓存，确保函数返回前已完成保存
+                        await _download_audio_to_cache(ext_res['url'], cache_filepath, source, songId)
             except Exception:
                 logger.warning('音频缓存调度失败(来自 external script)\n' + traceback.format_exc())
 
@@ -370,7 +371,15 @@ async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id
     if os.path.exists(filepath):
         return
     try:
-        async with variable.aioSession.get(url, timeout=120) as resp:
+        # 若全局 aioSession 不存在（如在独立脚本调用时），则临时创建一个
+        _owns_session = False
+        session = variable.aioSession
+        if session is None:
+            import aiohttp
+            session = aiohttp.ClientSession(trust_env=True)
+            _owns_session = True
+
+        async with session.get(url, timeout=120) as resp:
             if resp.status == 200:
                 with open(filepath, "wb") as f:
                     async for chunk in resp.content.iter_chunked(1024 * 64):
@@ -389,6 +398,8 @@ async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id
                     logger.debug("写入元数据失败\n" + traceback.format_exc())
             else:
                 logger.warning(f"下载音频失败({resp.status}): {url}")
+        if _owns_session:
+            await session.close()
     except Exception:
         logger.warning(f"下载音频异常: {url}\n" + traceback.format_exc())
 
