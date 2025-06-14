@@ -517,11 +517,11 @@ _ext_script_dir = os.path.join(variable.workdir, 'external_scripts')
 os.makedirs(_ext_script_dir, exist_ok=True)
 
 
-async def _ensure_script_download(url: str) -> str | None:
-    """若脚本不存在则下载，返回本地文件路径。"""
+async def _ensure_script_download(url: str, force: bool = False) -> str | None:
+    """下载脚本；force=True 时即使已存在也会重新下载覆盖。返回本地路径或 None"""
     filename = utils.createMD5(url.encode()) + '.js'
     filepath = os.path.join(_ext_script_dir, filename)
-    if os.path.exists(filepath):
+    if os.path.exists(filepath) and not force:
         return filepath
     try:
         async with variable.aioSession.get(url, timeout=20) as resp:
@@ -596,3 +596,14 @@ async def _try_external_script(source: str, song_id: str, quality: str):
             logger.info('[externalScript] 未得到有效结果，继续下一个脚本')
     logger.info('[externalScript] 所有脚本尝试失败')
     return None
+
+# 主动刷新所有脚本（启动时调用）
+async def refresh_external_scripts():
+    urls: list[str] = config.read_config('common.external_scripts.urls') or []
+    if not urls:
+        logger.info('[externalScript] 无外部脚本需要刷新')
+        return
+    logger.info('[externalScript] 正在刷新外部脚本...')
+    for url in urls:
+        await _ensure_script_download(url, force=True)
+    logger.info('[externalScript] 外部脚本刷新完成')

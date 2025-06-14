@@ -49,3 +49,4 @@ dumprecord_*.txt
 
 venv
 cache_audio
+external_scripts

@@ -149,15 +149,16 @@ async def handle(request):
 
     try:
         query = dict(request.query)
-        if (method in dir(modules)):
-            source_enable = config.read_config(f'module.{source}.enable')
-            if not source_enable:
-                return handleResult({
-                    'code': 4,
-                    'msg': '此平台已停止服务',
-                    'data': None,
-                    "Your IP": request.remote_addr
-                }, 404)
+        source_enable = config.read_config(f'module.{source}.enable')
+        # 若请求的是 url 方法，但本地模块已禁用，则允许进入 modules.url，让其尝试 external script fallback
+        if (not source_enable) and method != 'url':
+            return handleResult({
+                'code': 4,
+                'msg': '此平台已停止服务',
+                'data': None,
+                "Your IP": request.remote_addr
+            }, 404)
+        if method in dir(modules):
             return handleResult(await getattr(modules, method)(source, songId, quality, query))
         else:
             return handleResult(await modules.other(method, source, songId, quality, query))
@@ -330,6 +331,10 @@ async def run_app():
 async def initMain():
     await scheduler.run()
     variable.aioSession = aiohttp.ClientSession(trust_env=True)
+    try:
+        await modules.refresh_external_scripts()
+    except Exception:
+        logger.warning('刷新外部脚本失败\n' + traceback.format_exc())
     localMusic.initMain()
     try:
         await run_app()
