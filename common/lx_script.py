@@ -101,7 +101,13 @@ async def generate_script_response(request):
             newScriptLines.append(oline)
     r = '\n'.join(newScriptLines)
     
-    r = re.sub(r'const MUSIC_QUALITY = {[^}]+}', f'const MUSIC_QUALITY = JSON.parse(\'{json.dumps(config.read_config("common.download_config.quality"))}\')', r)
+    # 根据 module.{source}.enable 过滤掉已禁用的平台
+    full_quality_conf = config.read_config("common.download_config.quality") or {}
+    filtered_quality_conf = {
+        k: v for k, v in full_quality_conf.items()
+        if config.read_config(f"module.{k}.enable") is True
+    }
+    r = re.sub(r'const MUSIC_QUALITY = {[^}]+}', f'const MUSIC_QUALITY = JSON.parse(\'{json.dumps(filtered_quality_conf)}\')', r)
     
     # 用于检查更新
     if (config.read_config("common.download_config.update")):

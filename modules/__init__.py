@@ -67,6 +67,8 @@ async def url(source, songId, quality, query={}):
     cached_path = _find_cached_file(source, songId, quality)
     if cached_path:
         logger.debug(f"命中本地音频缓存: {cached_path}")
+        # 缓存虽已命中，但仍异步确认歌词/信息/封面是否存在
+        asyncio.create_task(_ensure_metadata_cached(source, songId))
         return {
             "code": 0,
             "msg": "success",
@@ -88,6 +90,8 @@ async def url(source, songId, quality, query={}):
         cache = config.getCache("urls", f"{source}_{songId}_{quality}")
         if cache:
             logger.debug(f'使用缓存的{source}_{songId}_{quality}数据，URL：{cache["url"]}')
+            # 缓存虽已命中，但仍异步确认歌词/信息/封面是否存在
+            asyncio.create_task(_ensure_metadata_cached(source, songId))
             return {
                 "code": 0,
                 "msg": "success",
@@ -134,12 +138,14 @@ async def url(source, songId, quality, query={}):
                 cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
                 if not os.path.exists(cache_filepath):
                     asyncio.create_task(_download_audio_to_cache(result["url"], cache_filepath))
+                # 并行缓存歌曲信息/封面/歌词
+                asyncio.create_task(_ensure_metadata_cached(source, songId))
         except Exception:
             logger.warning("音频缓存调度失败\n" + traceback.format_exc())
 
         canExpire = sourceExpirationTime[source]["expire"]
         expireTime = int(sourceExpirationTime[source]["time"] * 0.75)
-        expireAt = int(expireTime + time.time())
+        expireAt = int(time.time() + expireTime)
         config.updateCache(
             "urls",
             f"{source}_{songId}_{quality}",
@@ -153,6 +159,8 @@ async def url(source, songId, quality, query={}):
         )
         logger.debug(f'缓存已更新：{source}_{songId}_{quality}, URL：{result["url"]}, expire: {expireTime}')
 
+        # 缓存虽已命中，但仍异步确认歌词/信息/封面是否存在
+        asyncio.create_task(_ensure_metadata_cached(source, songId))
         return {
             "code": 0,
             "msg": "success",
@@ -236,6 +244,13 @@ async def search(source, songid, _, query):
 
 
 async def other(method, source, songid, _, query):
+    # info 方法支持本地缓存
+    cache_key = f"{source}_{songid}"
+    if method == "info":
+        cache = config.getCache("info", cache_key)
+        if cache:
+            return {"code": 0, "msg": "success", "data": cache["data"]}
+
     try:
         func = require("modules." + source + "." + method)
     except:
@@ -246,6 +261,9 @@ async def other(method, source, songid, _, query):
         }
     try:
         result = await func(songid)
+        # 若是 info，写入缓存
+        if method == "info":
+            config.updateCache("info", cache_key, {"expire": False, "time": 0, "data": result})
         return {"code": 0, "msg": "success", "data": result}
     except FailedException as e:
         return {
@@ -279,3 +297,57 @@ def _find_cached_file(source: str, song_id: str, quality: str):
     pattern = f"{source}_{song_id}_{quality}.*"
     files = glob.glob(os.path.join(_remote_cache_dir, pattern))
     return files[0] if files else None
+
+# —— 额外信息、歌词、封面缓存 ——
+async def _ensure_metadata_cached(source: str, song_id: str):
+    """获取 info/lyric 并缓存，同时下载封面到本地。"""
+    try:
+        # Info cache
+        info_key = f"{source}_{song_id}"
+        info_cache = config.getCache("info", info_key)
+        if not info_cache:
+            try:
+                func_info = require(f"modules.{source}.info")
+                info_data = await func_info(song_id)
+                # 写入缓存数据库（不过期）
+                config.updateCache("info", info_key, {"expire": False, "time": 0, "data": info_data})
+            except Exception:
+                logger.debug(f"获取 info 失败: {source} {song_id}\n" + traceback.format_exc())
+                info_data = None
+        else:
+            info_data = info_cache["data"]
+
+        # Lyric cache(已有实现，但若没命中可手动触发)
+        lyric_cache = config.getCache("lyric", info_key)
+        if not lyric_cache:
+            try:
+                func_lyric = require(f"modules.{source}.lyric")
+                lyric_data = await func_lyric(song_id)
+                # 3 天过期与 modules.lyric 保持一致
+                expire_time = 86400 * 3
+                expire_at = int(time.time() + expire_time)
+                config.updateCache("lyric", info_key, {"expire": True, "time": expire_at, "data": lyric_data}, expire_time)
+            except Exception:
+                logger.debug(f"获取 lyric 失败: {source} {song_id}\n" + traceback.format_exc())
+
+        # 下载封面
+        if info_data and info_data.get("cover"):
+            cover_url = info_data["cover"]
+            ext = os.path.splitext(cover_url.split("?")[0])[1] or ".jpg"
+            cover_filename = f"{source}_{song_id}_cover{ext}"
+            cover_path = os.path.join(_remote_cache_dir, cover_filename)
+            if not os.path.exists(cover_path):
+                try:
+                    async with variable.aioSession.get(cover_url) as resp:
+                        if resp.status == 200:
+                            with open(cover_path, "wb") as f:
+                                async for chunk in resp.content.iter_chunked(8192):
+                                    f.write(chunk)
+                            logger.info(f"封面缓存完成: {cover_path}")
+                            # 把cover地址替换为本地路径并重新写入缓存
+                            info_data["cover"] = f"/cache/{cover_filename}"
+                            config.updateCache("info", info_key, {"expire": False, "time": 0, "data": info_data})
+                except Exception:
+                    logger.debug(f"下载封面失败: {cover_url}\n" + traceback.format_exc())
+    except Exception:
+        logger.warning("缓存 metadata 发生异常\n" + traceback.format_exc())
