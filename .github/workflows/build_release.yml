@@ -2,7 +2,7 @@ name: Build Release
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
     paths-ignore:
       - '**.md'
       - '.gitignore'
