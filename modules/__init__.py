@@ -22,6 +22,7 @@ import ujson as json
 import asyncio.subprocess as asp
 from common import utils
 import sys  # 已存在? modules顶部有traceback, time, but not sys. ensure imported
+import collections
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -61,6 +62,38 @@ if not os.path.exists(_remote_cache_dir):
         os.makedirs(_remote_cache_dir, exist_ok=True)
     except Exception:
         logger.error(f"无法创建远端音频缓存目录: {_remote_cache_dir}")
+
+# ---------------- Cache index to avoid per-request disk scanning ----------------
+# 结构: _cache_index[(source, song_id)][quality] = filepath
+_cache_index: dict[tuple[str, str], dict[str, str]] = collections.defaultdict(dict)
+
+def _init_cache_index():
+    """扫描远端缓存目录并构建索引，在进程启动时调用一次。"""
+    try:
+        for fname in os.listdir(_remote_cache_dir):
+            # 排除封面/其它非音频文件
+            if fname.endswith('_cover.jpg') or fname.startswith('.'):
+                continue
+            name_no_ext, _ = os.path.splitext(fname)
+            parts = name_no_ext.split('_')
+            if len(parts) < 3:
+                # 文件名不符合 <source>_<songId>_<quality> 规则，跳过
+                continue
+            source = parts[0]
+            quality = parts[-1]
+            # song_id 可能包含 '_'，这里重新拼接中间段
+            song_id = '_'.join(parts[1:-1])
+            _cache_index[(source, song_id)][quality] = os.path.join(_remote_cache_dir, fname)
+    except FileNotFoundError:
+        # 目录尚不存在
+        pass
+
+# 在模块导入时立即构建索引
+_init_cache_index()
+
+# 公共方法: 增量更新索引
+def _update_cache_index(source: str, song_id: str, quality: str, filepath: str):
+    _cache_index[(source, song_id)][quality] = filepath
 
 async def url(source, songId, quality, query={}):
     # ❗ 为保证酷狗(Kugou)源的歌曲 ID 与磁盘/缓存中的命名一致，统一转为小写。
@@ -397,6 +430,14 @@ async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id
                     _embed_metadata(filepath, info_data, cover_path if os.path.exists(cover_path) else None, lyric_data)
                 except Exception:
                     logger.debug("写入元数据失败\n" + traceback.format_exc())
+
+                # 写入内存索引，供后续请求直接命中
+                try:
+                    name_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                    quality_inferred = name_no_ext.split('_')[-1]
+                    _update_cache_index(source, song_id, quality_inferred, filepath)
+                except Exception:
+                    pass
             else:
                 logger.warning(f"下载音频失败({resp.status}): {url}")
         if _owns_session:
@@ -450,16 +491,16 @@ def _embed_metadata(filepath: str, info: dict | None, cover_path: str | None, ly
 
 # Helper to build cache file path based on naming rule
 def _find_cached_file(source: str, song_id: str, quality: str):
-    # 先尝试精准匹配 quality，如未命中则回退到任意质量文件
-    pattern_exact = f"{source}_{song_id}_{quality}.*"
-    files = glob.glob(os.path.join(_remote_cache_dir, pattern_exact))
-    if files:
-        return files[0]
-
-    # 回退：只要找到同一首歌任意清晰度的文件即可
-    pattern_any = f"{source}_{song_id}_*.*"
-    files = glob.glob(os.path.join(_remote_cache_dir, pattern_any))
-    return files[0] if files else None
+    """从内存索引中查找缓存文件，避免每次请求都进行磁盘 glob。"""
+    song_map = _cache_index.get((source, song_id))
+    if not song_map:
+        return None
+    # 精准匹配 quality
+    if quality in song_map:
+        return song_map[quality]
+    # 回退：任意质量
+    # 按质量名称排序可保证稳定输出，但这里简单返回第一个
+    return next(iter(song_map.values()), None)
 
 # —— 额外信息、歌词、封面缓存 ——
 async def _ensure_metadata_cached(source: str, song_id: str):
