@@ -248,6 +248,15 @@ async def url(source, songId, quality, query={}):
 
         # 缓存虽已命中，但仍异步确认歌词/信息/封面是否存在
         asyncio.create_task(_ensure_metadata_cached(source, songId))
+
+        # 写入内存索引，供后续请求直接命中
+        try:
+            name_no_ext = os.path.splitext(os.path.basename(cache_filepath))[0]
+            quality_inferred = name_no_ext.split('_')[-1]
+            _update_cache_index(source, songId, quality_inferred, cache_filepath)
+        except Exception:
+            pass
+
         return {
             "code": 0,
             "msg": "success",
@@ -289,6 +298,14 @@ async def url(source, songId, quality, query={}):
             config.updateCache('urls', f"{source}_{songId}_{quality}", {'expire': False, 'time': 0, 'url': ext_res['url']})
 
             asyncio.create_task(_ensure_metadata_cached(source, songId))
+
+            # 写入内存索引，供后续请求直接命中
+            try:
+                name_no_ext = os.path.splitext(os.path.basename(cache_filepath))[0]
+                quality_inferred = name_no_ext.split('_')[-1]
+                _update_cache_index(source, songId, quality_inferred, cache_filepath)
+            except Exception:
+                pass
 
             return {
                 'code': 0,
@@ -406,49 +423,79 @@ async def info_with_query(source, songid, _, query):
     return await other("info", source, songid, None)
 
 async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id: str):
-    """后台下载音频文件到本地缓存，并在完成后写入元数据。"""
+    """后台下载音频文件到本地缓存，并在完成后写入元数据。
+    增加最多 3 次重试，并捕获 ConnectionResetError 等网络异常，降低 10054 触发概率。"""
+
     if os.path.exists(filepath):
         return
-    try:
-        # 若全局 aioSession 不存在（如在独立脚本调用时），则临时创建一个
+
+    import aiohttp
+    max_retry = 3
+    for attempt in range(1, max_retry + 1):
         _owns_session = False
         session = variable.aioSession
         if session is None:
-            import aiohttp
             session = aiohttp.ClientSession(trust_env=True)
             _owns_session = True
 
-        async with session.get(url, timeout=120) as resp:
-            if resp.status == 200:
+        try:
+            async with session.get(url, timeout=120) as resp:
+                if resp.status != 200:
+                    raise aiohttp.ClientResponseError(status=resp.status, request_info=resp.request_info, history=resp.history)
+
                 async with aiofiles.open(filepath, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(1024 * 64):
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
                         await f.write(chunk)
-                logger.info(f"音频缓存完成: {filepath}")
 
-                # 下载完成后嵌入元数据（若可用）
-                try:
-                    info_cache = config.getCache("info", f"{source}_{song_id}")
-                    info_data = info_cache["data"] if info_cache else None
-                    lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
-                    lyric_data = lyric_cache["data"] if lyric_cache else None
-                    cover_path = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
-                    _embed_metadata(filepath, info_data, cover_path if os.path.exists(cover_path) else None, lyric_data)
-                except Exception:
-                    logger.debug("写入元数据失败\n" + traceback.format_exc())
+            logger.info(f"音频缓存完成: {filepath}")
 
-                # 写入内存索引，供后续请求直接命中
+            # 下载完成后嵌入元数据（若可用）
+            try:
+                info_cache = config.getCache("info", f"{source}_{song_id}")
+                info_data = info_cache["data"] if info_cache else None
+                lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
+                lyric_data = lyric_cache["data"] if lyric_cache else None
+                cover_path = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
+                _embed_metadata(filepath, info_data, cover_path if os.path.exists(cover_path) else None, lyric_data)
+            except Exception:
+                logger.debug("写入元数据失败\n" + traceback.format_exc())
+
+            # 写入内存索引，供后续请求直接命中
+            try:
+                name_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                quality_inferred = name_no_ext.split('_')[-1]
+                _update_cache_index(source, song_id, quality_inferred, filepath)
+            except Exception:
+                pass
+
+            # 成功即结束
+            break
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionResetError) as e:
+            # 删除可能写入的不完整文件
+            if os.path.exists(filepath):
                 try:
-                    name_no_ext = os.path.splitext(os.path.basename(filepath))[0]
-                    quality_inferred = name_no_ext.split('_')[-1]
-                    _update_cache_index(source, song_id, quality_inferred, filepath)
+                    os.remove(filepath)
                 except Exception:
                     pass
-            else:
-                logger.warning(f"下载音频失败({resp.status}): {url}")
-        if _owns_session:
-            await session.close()
-    except Exception:
-        logger.warning(f"下载音频异常: {url}\n" + traceback.format_exc())
+
+            logger.warning(f"下载音频失败/重试 {attempt}/{max_retry}: {e}")
+
+            if attempt == max_retry:
+                logger.error(f"下载音频放弃: {url}")
+        except Exception:
+            logger.warning(f"下载音频异常: {url}\n" + traceback.format_exc())
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+            if attempt == max_retry:
+                logger.error(f"下载音频放弃: {url}")
+        finally:
+            if _owns_session:
+                await session.close()
+            if attempt < max_retry:
+                await asyncio.sleep(1)
 
 def _embed_metadata(filepath: str, info: dict | None, cover_path: str | None, lyric_content: str | None):
     """将歌曲信息、歌词、封面写入音频文件元数据。支持 mp3 / flac。"""
