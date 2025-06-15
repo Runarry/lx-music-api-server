@@ -96,6 +96,10 @@ _init_cache_index()
 def _update_cache_index(source: str, song_id: str, quality: str, filepath: str):
     _cache_index[(source, song_id)][quality] = filepath
 
+# ---------------- Metadata in-flight set to avoid duplicate tasks ----------------
+_inflight_meta: set[tuple[str, str]] = set()
+_inflight_meta_lock = asyncio.Lock()
+
 async def url(source, songId, quality, query={}):
     # ❗ 为保证酷狗(Kugou)源的歌曲 ID 与磁盘/缓存中的命名一致，统一转为小写。
     #   之前的实现是在本地文件检查之后才转换，导致相同歌曲无法命中缓存。
@@ -505,7 +509,15 @@ def _find_cached_file(source: str, song_id: str, quality: str):
 
 # —— 额外信息、歌词、封面缓存 ——
 async def _ensure_metadata_cached(source: str, song_id: str):
-    """获取 info/lyric 并缓存，同时下载封面到本地。"""
+    """获取 info/lyric 并缓存，同时下载封面到本地。并发去重。"""
+
+    key = (source, song_id)
+    # --- 去重: 若已有同源任务正在进行, 直接返回 ---
+    async with _inflight_meta_lock:
+        if key in _inflight_meta:
+            return
+        _inflight_meta.add(key)
+
     try:
         # Info cache
         info_key = f"{source}_{song_id}"
@@ -554,25 +566,29 @@ async def _ensure_metadata_cached(source: str, song_id: str):
                             config.updateCache("info", info_key, {"expire": False, "time": 0, "data": info_data})
                 except Exception:
                     logger.debug(f"下载封面失败: {cover_url}\n" + traceback.format_exc())
+
+        # —— 尝试把元数据写入已存在的缓存音频 ——
+        try:
+            for file_path in glob.glob(os.path.join(_remote_cache_dir, f"{source}_{song_id}_*.*")):
+                if file_path.endswith('_cover.jpg'):
+                    continue
+                info_cache = config.getCache("info", f"{source}_{song_id}")
+                info_data = info_cache["data"] if info_cache else None
+                lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
+                lyric_data = lyric_cache["data"] if lyric_cache else None
+                cover_file = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
+                if not info_data:
+                    logger.debug(f"[meta] info still missing for {source}_{song_id}")
+                    continue
+                _embed_metadata(file_path, info_data, cover_file if os.path.exists(cover_file) else None, lyric_data)
+        except Exception:
+            logger.debug("embed metadata post-process error\n" + traceback.format_exc())
     except Exception:
         logger.warning("缓存 metadata 发生异常\n" + traceback.format_exc())
-
-    # —— 尝试把元数据写入已存在的缓存音频 ——
-    try:
-        for file_path in glob.glob(os.path.join(_remote_cache_dir, f"{source}_{song_id}_*.*")):
-            if file_path.endswith('_cover.jpg'):
-                continue
-            info_cache = config.getCache("info", f"{source}_{song_id}")
-            info_data = info_cache["data"] if info_cache else None
-            lyric_cache = config.getCache("lyric", f"{source}_{song_id}")
-            lyric_data = lyric_cache["data"] if lyric_cache else None
-            cover_file = os.path.join(_remote_cache_dir, f"{source}_{song_id}_cover.jpg")
-            if not info_data:
-                logger.debug(f"[meta] info still missing for {source}_{song_id}")
-                continue
-            _embed_metadata(file_path, info_data, cover_file if os.path.exists(cover_file) else None, lyric_data)
-    except Exception:
-        logger.debug("embed metadata post-process error\n" + traceback.format_exc())
+    finally:
+        # 任务结束, 移除标记
+        async with _inflight_meta_lock:
+            _inflight_meta.discard(key)
 
 # ================= 外部 lx-music-source.js 脚本支持 =================
 # 目录 ./external_scripts 用于缓存下载的脚本文件
