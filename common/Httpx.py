@@ -158,20 +158,18 @@ def request(url: str, options={}) -> requests.Response:
         raise e
     # 请求后记录
     logger.debug(f"Request to {url} succeed with code {req.status_code}")
-    if req.content.startswith(b"\x78\x9c") or req.content.startswith(b"\x78\x01"):  # zlib headers
+    # 精简响应体日志：仅在 debug_mode=true 且体积<=4KB 时输出
+    if variable.debug_mode and len(req.content) <= 4096:
         try:
-            decompressed = zlib.decompress(req.content)
-            if is_valid_utf8(decompressed):
-                logger.debug(log_plaintext(decompressed.decode("utf-8")))
+            if req.content.startswith(b"\x78\x9c") or req.content.startswith(b"\x78\x01"):  # zlib headers
+                decompressed = zlib.decompress(req.content)
+                if is_valid_utf8(decompressed):
+                    logger.debug(log_plaintext(decompressed.decode("utf-8")))
             else:
-                logger.debug("response is not text binary, ignore logging it")
-        except:
-            logger.debug("response is not text binary, ignore logging it")
-    else:
-        if is_valid_utf8(req.content):
-            logger.debug(log_plaintext(req.content.decode("utf-8")))
-        else:
-            logger.debug("response is not text binary, ignore logging it")
+                if is_valid_utf8(req.content):
+                    logger.debug(log_plaintext(req.content.decode("utf-8")))
+        except Exception:
+            logger.debug("response body logging skipped (decode error)")
     # 缓存写入
     if cache_info and cache_info != "no-cache":
         cache_data = pickle.dumps(req)
@@ -331,20 +329,18 @@ async def AsyncRequest(url, options={}) -> ClientResponse:
     # 为懒人提供的不用改代码移植的方法
     # 才不是梓澄呢
     req = await convert_to_requests_response(req_)
-    if req.content.startswith(b"\x78\x9c") or req.content.startswith(b"\x78\x01"):  # zlib headers
+    # 精简响应体日志：仅在 debug_mode=true 且体积<=4KB 时输出
+    if variable.debug_mode and len(req.content) <= 4096:
         try:
-            decompressed = zlib.decompress(req.content)
-            if is_valid_utf8(decompressed):
-                logger.debug(log_plaintext(decompressed.decode("utf-8")))
+            if req.content.startswith(b"\x78\x9c") or req.content.startswith(b"\x78\x01"):
+                decompressed = zlib.decompress(req.content)
+                if is_valid_utf8(decompressed):
+                    logger.debug(log_plaintext(decompressed.decode("utf-8")))
             else:
-                logger.debug("response is not text binary, ignore logging it")
-        except:
-            logger.debug("response is not text binary, ignore logging it")
-    else:
-        if is_valid_utf8(req.content):
-            logger.debug(log_plaintext(req.content.decode("utf-8")))
-        else:
-            logger.debug("response is not text binary, ignore logging it")
+                if is_valid_utf8(req.content):
+                    logger.debug(log_plaintext(req.content.decode("utf-8")))
+        except Exception:
+            logger.debug("response body logging skipped (decode error)")
     # 缓存写入
     if cache_info and cache_info != "no-cache":
         cache_data = pickle.dumps(req)

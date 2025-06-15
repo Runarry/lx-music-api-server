@@ -23,6 +23,7 @@ import asyncio.subprocess as asp
 from common import utils
 import sys  # 已存在? modules顶部有traceback, time, but not sys. ensure imported
 import collections
+import aiofiles
 
 # 从.引入的包并没有在代码中直接使用，但是是用require在请求时进行引入的，不要动
 from . import kw
@@ -415,9 +416,9 @@ async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id
 
         async with session.get(url, timeout=120) as resp:
             if resp.status == 200:
-                with open(filepath, "wb") as f:
+                async with aiofiles.open(filepath, "wb") as f:
                     async for chunk in resp.content.iter_chunked(1024 * 64):
-                        f.write(chunk)
+                        await f.write(chunk)
                 logger.info(f"音频缓存完成: {filepath}")
 
                 # 下载完成后嵌入元数据（若可用）
