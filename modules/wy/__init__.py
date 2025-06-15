@@ -117,3 +117,15 @@ async def url(songId, quality):
             'url': data["url"].split("?")[0],
             'quality': quality
         }
+
+# ========================
+# TODO: Lyrics API placeholder
+# ========================
+async def lyric(song_id):
+    """Temporary stub for Lyric fetching.
+
+    网易云音乐新接口尚未适配歌词抓取。此处返回空字符串以维持接口一致性，
+    避免抛出异常导致业务逻辑中断。
+    TPODO: 调用 /lyric 或者 cloudapi 的相关接口，解析并返回时间轴歌词文本。
+    """
+    return ""

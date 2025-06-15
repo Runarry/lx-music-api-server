@@ -115,3 +115,19 @@ async def url(songId, quality):
         }
     else:
         raise FailedException('配置文件参数proto填写错误或不支持')
+
+# ========================
+# TODO: Lyrics API placeholder
+# ========================
+async def lyric(song_id):
+    """Temporary stub for Lyric fetching.
+
+    NOTE: Kuwo lyric API has not been implemented yet. This stub keeps the
+    server logic running without raising runtime errors. It simply returns
+    an empty string so that upstream cache / embed processes can continue
+    safely.
+    TPODO: Implement real lyric retrieval via Kuwo endpoint and return
+    synchronized lrc text.
+    """
+    # Returning empty string rather than raising to avoid breaking caller logic.
+    return ""

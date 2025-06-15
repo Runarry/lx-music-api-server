@@ -61,3 +61,14 @@ async def url(songmid, quality):
         }
     except:
         raise FailedException('failed')
+
+# ========================
+# TODO: Lyrics API placeholder
+# ========================
+async def lyric(song_id):
+    """Temporary stub for Lyric fetching.
+
+    当前暂未实现咪咕音乐歌词获取。为了避免调用方报错，这里直接返回空字符串。
+    TPODO: 实现对咪咕官方接口的调用，获取并返回标准 LRC 歌词文本。
+    """
+    return ""
