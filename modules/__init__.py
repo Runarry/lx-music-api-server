@@ -564,18 +564,11 @@ async def _ensure_script_download(url: str, force: bool = False) -> str | None:
 
 def _locate_run_external_js() -> str | None:
     """在不同运行/打包环境下定位 run_external.js 的实际路径。"""
-    candidates: list[str] = []
-    # 1) 当前工作目录（variable.workdir）
-    candidates.append(os.path.join(variable.workdir, 'run_external.js'))
-    # 2) 与本文件同级的上层目录（项目根目录）
-    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'run_external.js'))
-    # 3) PyInstaller 临时解压目录
-    if hasattr(sys, '_MEIPASS'):
-        candidates.append(os.path.join(sys._MEIPASS, 'run_external.js'))
+    # 0) external_scripts 目录（优先使用已写入的脚本）
+    path = os.path.join(_ext_script_dir, 'run_external.js')
 
-    for path in candidates:
-        if os.path.exists(path):
-            return os.path.abspath(path)
+    if os.path.exists(path):
+        return os.path.abspath(path)
 
     # 若仍未找到，尝试写入内嵌脚本
     target_path = os.path.join(_ext_script_dir, 'run_external.js')
