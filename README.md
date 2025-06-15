@@ -1,3 +1,32 @@
+**重要说明**：本项目在原lx-music-api-server基础上，增加了大量我自己使用的功能，没有考虑通用性。
+1. 增加了local 源的特殊匹配机制（根据文件名称匹配server的audio_path目录，如果存在，直接返回该文件路径）
+2. 增加了音乐缓存，相关配置：
+```yaml
+common:
+  ......
+
+  # 远端音频缓存配置（新增）
+  remote_cache:
+    enable: true           # 是否开启远端音频下载缓存
+    path: ./cache_audio    # 缓存文件保存目录
+```
+3. 增加了external_scripts功能，可以添加其他第三方的源脚本（LX标准的自定义源脚本），当服务自身配置的源拉取不到信息，将直接调用第三方源脚本。相关配置,可以配置多个源，这样会依次尝试拉取。
+```yaml
+common:
+  ......
+
+  external_scripts:
+    urls:
+    - https://api.ikunshare.top:8000/script?key=KAWANG_bf5f7218-PPPKER0AOWGN8I17
+
+```
+
+
+
+
+
+
+
 简体中文 | [English](README_EN.md)
 
 <div align="center">
