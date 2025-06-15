@@ -59,3 +59,6 @@ use_proxy = False
 http_proxy = ''
 https_proxy = ''
 log_files = []
+request_time = {}
+ban_list = {}
+ban_list_raw = set()

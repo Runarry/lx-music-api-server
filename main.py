@@ -329,6 +329,7 @@ async def run_app():
 
 
 async def initMain():
+    scheduler.append("persist_ban_list", config.persist_ban_list, 900)
     await scheduler.run()
     variable.aioSession = aiohttp.ClientSession(trust_env=True)
     asyncio.create_task(checkcn_async())

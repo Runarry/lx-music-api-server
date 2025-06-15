@@ -193,40 +193,15 @@ def updateCache(module, key, data, expire=None):
 
 
 def resetRequestTime(ip):
-    config_data = load_data()
-    try:
-        try:
-            config_data["requestTime"][ip] = 0
-        except KeyError:
-            config_data["requestTime"] = {}
-            config_data["requestTime"][ip] = 0
-        save_data(config_data)
-    except:
-        logger.error("配置写入遇到错误…")
-        logger.error(traceback.format_exc())
+    variable.request_time[ip] = 0
 
 
 def updateRequestTime(ip):
-    try:
-        config_data = load_data()
-        try:
-            config_data["requestTime"][ip] = time.time()
-        except KeyError:
-            config_data["requestTime"] = {}
-            config_data["requestTime"][ip] = time.time()
-        save_data(config_data)
-    except:
-        logger.error("配置写入遇到错误...")
-        logger.error(traceback.format_exc())
+    variable.request_time[ip] = time.time()
 
 
 def getRequestTime(ip):
-    config_data = load_data()
-    try:
-        value = config_data["requestTime"][ip]
-    except:
-        value = 0
-    return value
+    return variable.request_time.get(ip, 0)
 
 
 def read_data(key):
@@ -495,45 +470,43 @@ value TEXT)"""
         logger.info("所以即使某个源你只有一个cookie，也请填写到cookiepool对应的源中，否则将无法使用该cookie")
         variable.use_cookie_pool = True
 
-    # 移除已经过期的封禁数据
-    banlist = read_data("banList")
-    banlistRaw = read_data("banListRaw")
+    # Load ban list into memory
+    logger.debug("Loading ban list into memory...")
+    db_ban_list = read_data("banList") # This still uses the old slow method, but only once at startup.
     count = 0
-    for b in banlist:
-        if b["expire"] and (time.time() > b["expire_time"]):
-            count += 1
-            banlist.remove(b)
-            if b["ip"] in banlistRaw:
-                banlistRaw.remove(b["ip"])
-    write_data("banList", banlist)
-    write_data("banListRaw", banlistRaw)
-    if count != 0:
-        logger.info(f"已移除{count}条过期封禁数据")
-
-    # 处理旧版数据库的banListRaw
-    banlist = read_data("banList")
-    banlistRaw = read_data("banListRaw")
-    if banlist != [] and banlistRaw == []:
-        for b in banlist:
-            banlistRaw.append(b["ip"])
+    if db_ban_list:
+        for b in db_ban_list:
+            # Check for expiration before adding to memory
+            if b.get("expire") and (time.time() > b.get("expire_time", 0)):
+                count += 1
+                continue
+            variable.ban_list[b["ip"]] = b
+            variable.ban_list_raw.add(b["ip"])
+    
+    if count > 0:
+        logger.info(f"启动时已忽略{count}条过期封禁数据")
     return
 
 
 def ban_ip(ip_addr, ban_time=-1):
     if read_config("security.banlist.enable"):
-        banList = read_data("banList")
-        banList.append(
-            {
-                "ip": ip_addr,
-                "expire": read_config("security.banlist.expire.enable"),
-                "expire_time": read_config("security.banlist.expire.length") if (ban_time == -1) else ban_time,
-            }
-        )
-        write_data("banList", banList)
-        banListRaw = read_data("banListRaw")
-        if ip_addr not in banListRaw:
-            banListRaw.append(ip_addr)
-            write_data("banListRaw", banListRaw)
+        expire_enabled = read_config("security.banlist.expire.enable")
+        
+        if ban_time == -1:
+            ban_length = read_config("security.banlist.expire.length")
+        else:
+            ban_length = ban_time
+        
+        expire_time = time.time() + ban_length
+
+        ban_info = {
+            "ip": ip_addr,
+            "expire": expire_enabled,
+            "expire_time": expire_time,
+        }
+        variable.ban_list[ip_addr] = ban_info
+        variable.ban_list_raw.add(ip_addr)
+        # TODO: Add a background task to persist the ban list to the database
     else:
         if variable.banList_suggest < 10:
             variable.banList_suggest += 1
@@ -542,32 +515,50 @@ def ban_ip(ip_addr, ban_time=-1):
 
 def check_ip_banned(ip_addr):
     if read_config("security.banlist.enable"):
-        banList = read_data("banList")
-        banlistRaw = read_data("banListRaw")
-        if ip_addr in banlistRaw:
-            for b in banList:
-                if b["ip"] == ip_addr:
-                    if b["expire"]:
-                        if b["expire_time"] > int(time.time()):
-                            return True
-                        else:
-                            banList.remove(b)
-                            banlistRaw.remove(b["ip"])
-                            write_data("banListRaw", banlistRaw)
-                            write_data("banList", banList)
-                            return False
-                    else:
-                        return True
+        if ip_addr in variable.ban_list_raw:
+            ban_info = variable.ban_list.get(ip_addr)
+            if not ban_info:
+                # This can happen if the raw list and the dict get out of sync.
+                # Safely remove from raw list and return False.
+                variable.ban_list_raw.discard(ip_addr)
+                return False
+            
+            if ban_info["expire"]:
+                if ban_info["expire_time"] > int(time.time()):
+                    return True
                 else:
+                    # Expired, remove from in-memory list
+                    variable.ban_list.pop(ip_addr, None)
+                    variable.ban_list_raw.discard(ip_addr)
+                    # TODO: Add a background task to remove the expired ban from the database
                     return False
-            return False
-        else:
-            return False
+            else:
+                # No expiration, permanent ban
+                return True
+        return False
     else:
         if variable.banList_suggest <= 10:
             variable.banList_suggest += 1
             logger.warning("黑名单功能已被关闭，我们墙裂建议你开启这个功能以防止恶意请求")
         return False
+
+
+async def persist_ban_list():
+    """
+    Persist the in-memory ban list to the database.
+    """
+    logger.debug("Persisting ban list to database...")
+    # Create a copy to avoid issues with concurrent modification
+    ban_list_to_persist = list(variable.ban_list.values())
+    
+    # We are writing the whole list, so we can use the old write_data function
+    # which overwrites the key. This is simpler than handling individual deletions.
+    write_data("banList", ban_list_to_persist)
+    
+    # Also update the raw list in the database for consistency, though it's not strictly used anymore.
+    raw_list = [b['ip'] for b in ban_list_to_persist]
+    write_data("banListRaw", raw_list)
+    logger.debug(f"Persisted {len(ban_list_to_persist)} ban entries to database.")
 
 
 init_config()
