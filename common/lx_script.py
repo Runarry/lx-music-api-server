@@ -101,6 +101,11 @@ async def generate_script_response(request):
             newScriptLines.append(oline)
     r = '\n'.join(newScriptLines)
     
+    # —— 移除模板中对 `server_` 前缀的强制要求 ——
+    r = re.sub(r"if \(!musicInfo\.songmid\.startsWith\('server_'\)\) throw new Error\('[^']*'\);?", "", r)
+    # 去掉对 songmid 的 replace('server_', '') 调用
+    r = re.sub(r"songId\.replace\('server_', ''\)", "songId", r)
+    
     # 根据 module.{source}.enable 过滤掉已禁用的平台
     full_quality_conf = config.read_config("common.download_config.quality") or {}
     # 不再过滤渠道，全部下发

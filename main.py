@@ -178,26 +178,28 @@ async def handle_local(request):
         data = json.loads(data)
         t = request.match_info.get('type')
         data['t'] = t
+        # 打印前端传入的参数，便于调试
+        logger.info(f"[LOCAL API] type={t}, p={data.get('p')}")
     except:
         logger.info(traceback.format_exc())
         return handleResult({'code': 6, 'msg': '请求参数有错', 'data': None}, 404)
     if (data['t'] == 'u'):
-        if (data['p'] in list(localMusic.map.keys())):
+        if localMusic.hasMusic(data['p']):
             return await localMusic.generateAudioFileResonse(data['p'])
         else:
             return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
     if (data['t'] == 'l'):
-        if (data['p'] in list(localMusic.map.keys())):
+        if localMusic.hasMusic(data['p']):
             return await localMusic.generateAudioLyricResponse(data['p'])
         else:
             return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
     if (data['t'] == 'p'):
-        if (data['p'] in list(localMusic.map.keys())):
+        if localMusic.hasMusic(data['p']):
             return await localMusic.generateAudioCoverResonse(data['p'])
         else:
             return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
     if (data['t'] == 'c'):
-        if (not data['p'] in list(localMusic.map.keys())):
+        if (not localMusic.hasMusic(data['p'])):
             return {
                 'code': 0,
                 'msg': 'success',

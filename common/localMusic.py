@@ -345,31 +345,39 @@ def initMain():
         audios = findAudios(cache['audios'])
         writeLocalCache(audios)
     for a in audios:
-        map[a['filepath']] = a
+        map[os.path.basename(a['filepath'])] = a
     logger.info("初始化本地音乐成功")
     logger.debug(f'本地音乐列表: {audios}')
     logger.debug(f'本地音乐map: {map}')
 
-async def generateAudioFileResonse(path):
+async def generateAudioFileResonse(name):
+    """根据文件名返回音频文件流"""
     try:
-        w = map[path]
+        w = map.get(name) or map.get(os.path.basename(name))
         return aiohttp.web.FileResponse(w['filepath'])
-    except:
+    except KeyError:
         return {
             'code': 2,
             'msg': '未找到文件',
             'data': None
         }, 404
 
-async def generateAudioCoverResonse(path):
+async def generateAudioCoverResonse(name):
+    """根据文件名返回封面图文件流"""
     try:
-        w = map[path]
+        w = map.get(name) or map.get(os.path.basename(name))
         if (not os.path.exists(w['cover_path'])):
             p = writeAudioCover(w['filepath'])
             logger.debug(f"生成音乐封面文件 {w['cover_path']} 成功")
             return aiohttp.web.FileResponse(p)
         return aiohttp.web.FileResponse(w['cover_path'])
-    except:
+    except KeyError:
+        return {
+            'code': 2,
+            'msg': '未找到封面',
+            'data': None
+        }, 404
+    except Exception:
         logger.debug(traceback.format_exc())
         return {
             'code': 2,
@@ -377,20 +385,34 @@ async def generateAudioCoverResonse(path):
             'data': None
         }, 404
 
-async def generateAudioLyricResponse(path):
+async def generateAudioLyricResponse(name):
+    """根据文件名返回歌词文本"""
     try:
-        w = map[path]
+        w = map.get(name) or map.get(os.path.basename(name))
         return w['lyrics']
-    except:
+    except KeyError:
         return {
             'code': 2,
             'msg': '未找到歌词',
             'data': None
         }, 404
 
-def checkLocalMusic(path):
+def checkLocalMusic(name):
+    """检查指定文件名的音频、封面、歌词是否存在"""
+    key = name if name in map else os.path.basename(name)
+    if key not in map:
+        # 文件名本身未收录，则全部视为不存在
+        return {
+            'file': False,
+            'cover': False,
+            'lyric': False
+        }
+    w = map[key]
     return {
-        'file': os.path.exists(path),
-        'cover': os.path.exists(map[path]['cover_path']),
-        'lyric': bool(map[path]['lyrics'])
+        'file': os.path.exists(w['filepath']),
+        'cover': os.path.exists(w['cover_path']),
+        'lyric': bool(w['lyrics'])
     }
+
+def hasMusic(name):
+    return (name in map) or (os.path.basename(name) in map)
