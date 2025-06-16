@@ -7,75 +7,74 @@
 # ----------------------------------------
 # This file is part of the "lx-music-api-server" project.
 
-from . import Httpx
 from . import config
 from . import scheduler
 from .log import log
 from aiohttp.web import Response
 import ujson as json
 import re
+import os
+import sys
 from common.utils import createMD5
 
 logger = log('lx_script')
 
-jsd_mirror_list = [
-    'https://cdn.jsdelivr.net',
-    'https://gcore.jsdelivr.net',
-    'https://fastly.jsdelivr.net',
-    'https://jsd.cdn.zzko.cn',
-    'https://jsdelivr.b-cdn.net',
-]
-github_raw_mirror_list = [
-    'https://raw.githubusercontent.com',
-    'https://mirror.ghproxy.com/https://raw.githubusercontent.com',
-    'https://ghraw.gkcoll.xyz',
-    'https://raw.fgit.mxtrans.net',
-    'https://github.moeyy.xyz/https://raw.githubusercontent.com',
-    'https://raw.fgit.cf',
-]
-
-async def get_response(retry = 0):
-    if (retry > 21):
-        logger.warning('请求源脚本内容失败')
-        return
-    baseurl = '/MeoProject/lx-music-api-server/main/lx-music-source-example.js'
-    jsdbaseurl = '/gh/MeoProject/lx-music-api-server@main/lx-music-source-example.js'
+def get_resource_path(relative_path):
+    """获取资源文件路径，处理PyInstaller打包后的情况"""
     try:
-        i = retry
-        if (i > 10):
-            i = i - 11
-        if (i < 5):
-            req = await Httpx.AsyncRequest(jsd_mirror_list[retry] + jsdbaseurl)
-        elif (i < 11):
-            req = await Httpx.AsyncRequest(github_raw_mirror_list[retry - 5] + baseurl)
-        if (not req.text.startswith('/*!')):
-            logger.info('疑似请求到了无效的内容，忽略')
-            raise Exception from None
-    except Exception as e:
-        if (isinstance(e, RuntimeError)):
-            if ('Session is closed' in str(e)):
-                logger.error('脚本更新失败，clientSession已被关闭')
-                return
-        return await get_response(retry + 1)
-    return req
+        # PyInstaller打包后的临时文件夹
+        base_path = sys._MEIPASS
+    except Exception:
+        # 开发环境下的路径
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def get_script_content():
+    """
+    获取脚本模板内容
+    优先级：
+    1. 同目录下的 lx-music-source-example.js
+    2. 内嵌资源文件
+    """
+    local_script_path = './lx-music-source-example.js'
+    embedded_script_path = get_resource_path('lx-music-source-example.js')
+    
+    # 优先读取同目录下的模板文件
+    if os.path.exists(local_script_path):
+        try:
+            with open(local_script_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                logger.info('使用本地模板脚本文件')
+                return content
+        except Exception as e:
+            logger.warning(f'读取本地模板脚本失败: {e}')
+    
+    # 如果本地文件不存在或读取失败，使用内嵌资源
+    if os.path.exists(embedded_script_path):
+        try:
+            with open(embedded_script_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                logger.info('使用内嵌模板脚本文件')
+                return content
+        except Exception as e:
+            logger.error(f'读取内嵌模板脚本失败: {e}')
+    
+    logger.error('无法找到模板脚本文件')
+    return None
+
 async def get_script():
-    req = await get_response()
-    if (req.status == 200):
-        with open('./lx-music-source-example.js', 'w', encoding='utf-8') as f:
-            f.write(req.text)
-            f.close()
-        logger.info('更新源脚本成功')
-    else:
-        logger.warning('请求源脚本内容失败')
+    """保持向后兼容，但现在不做任何操作"""
+    logger.info('脚本模板现已使用本地文件，无需远程更新')
+    pass
 
 async def generate_script_response(request):
     if (request.query.get('key') not in config.read_config('security.key.values') and config.read_config('security.key.enable')):
         return {'code': 6, 'msg': 'key验证失败', 'data': None}, 403
-    try:
-        with open('./lx-music-source-example.js', 'r', encoding='utf-8') as f:
-            script = f.read()
-    except:
-        return {'code': 4, 'msg': '本地无源脚本', 'data': None}, 400
+    
+    # 使用新的脚本内容获取方法
+    script = get_script_content()
+    if script is None:
+        return {'code': 4, 'msg': '无法获取源脚本模板', 'data': None}, 400
     scriptLines = script.split('\n')
     newScriptLines = []
     for line in scriptLines:
@@ -147,5 +146,6 @@ async def generate_script_response(request):
                             else (config.read_config("common.download_config.filename") + ".js")}'''
                     })
 
-if (config.read_config('common.allow_download_script')):
-    scheduler.append('update_script', get_script)
+# 脚本模板现已使用本地文件，无需远程更新任务
+# if (config.read_config('common.allow_download_script')):
+#     scheduler.append('update_script', get_script)

@@ -50,3 +50,4 @@ dumprecord_*.txt
 venv
 cache_audio
 external_scripts
+test_output
