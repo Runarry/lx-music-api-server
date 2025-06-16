@@ -59,6 +59,18 @@ const handleBase64Encode = (data) => {
 }
 
 /**
+ * Creates URL-safe base64 encoded string from data object.
+ *
+ * @param {object} data - the data object to be encoded
+ * @return {string} the URL-safe base64 encoded string
+ */
+const createUrlSafeBase64 = (data) => {
+  return handleBase64Encode(JSON.stringify(data))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+}
+
+/**
  * 
  * @param {string} source - 音源
  * @param {object} musicInfo - 歌曲信息
@@ -74,7 +86,7 @@ const handleGetMusicUrl = async (source, musicInfo, quality) => {
       p: songId.replace('server_', ''),
     }
     var t = 'c'
-    var b = handleBase64Encode(JSON.stringify(requestBody)) /* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+    var b = createUrlSafeBase64(requestBody)
     const targetUrl = `${API_URL}/local/${t}?q=${b}`
     const request = await httpFetch(targetUrl, {
       method: 'GET',
@@ -88,7 +100,7 @@ const handleGetMusicUrl = async (source, musicInfo, quality) => {
     const { body } = request
     if (body.code == 0 && body.data && body.data.file) {
       var t = 'u'
-      var b = handleBase64Encode(JSON.stringify(requestBody)) /* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+      var b = createUrlSafeBase64(requestBody)
       return `${API_URL}/local/${t}?q=${b}`
     }
     throw new Error('404 Not Found')
@@ -145,7 +157,7 @@ const handleGetMusicPic = async (source, musicInfo) => {
         p: songId.replace('server_', ''),
       }
       var t = 'c'
-      var b = handleBase64Encode(JSON.stringify(requestBody))/* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+      var b = createUrlSafeBase64(requestBody)
       const targetUrl = `${API_URL}/local/${t}?q=${b}`
       const request = await httpFetch(targetUrl, {
         method: 'GET',
@@ -158,7 +170,7 @@ const handleGetMusicPic = async (source, musicInfo) => {
       const { body } = request
       if (body.code === 0 && body.data.cover) {
         var t = 'p'
-        var b = handleBase64Encode(JSON.stringify(requestBody))/* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+        var b = createUrlSafeBase64(requestBody)
         return `${API_URL}/local/${t}?q=${b}`
       }
       throw new Error('get music pic failed')
@@ -176,7 +188,7 @@ const handleGetMusicLyric = async (source, musicInfo) => {
         p: songId.replace('server_', ''),
       }
       var t = 'c'
-      var b = handleBase64Encode(JSON.stringify(requestBody))/* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+      var b = createUrlSafeBase64(requestBody)
       const targetUrl = `${API_URL}/local/${t}?q=${b}`
       const request = await httpFetch(targetUrl, {
         method: 'GET',
@@ -189,7 +201,7 @@ const handleGetMusicLyric = async (source, musicInfo) => {
       const { body } = request
       if (body.code === 0 && body.data.lyric) {
         var t = 'l'
-        var b = handleBase64Encode(JSON.stringify(requestBody))/* url safe*/.replace(/\+/g, '-').replace(/\//g, '_')
+        var b = createUrlSafeBase64(requestBody)
         const request2 = await httpFetch(`${API_URL}/local/${t}?q=${b}`, {
           method: 'GET',
           headers: {
