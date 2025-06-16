@@ -33,11 +33,11 @@ def get_script_content():
     """
     获取脚本模板内容
     优先级：
-    1. 同目录下的 lx-music-source-example.js
+    1. 同目录下的 lx-music-source.js.template
     2. 内嵌资源文件
     """
-    local_script_path = './lx-music-source-example.js'
-    embedded_script_path = get_resource_path('lx-music-source-example.js')
+    local_script_path = './lx-music-source.js.template'
+    embedded_script_path = get_resource_path('lx-music-source.js.template')
     
     # 优先读取同目录下的模板文件
     if os.path.exists(local_script_path):

@@ -109,7 +109,7 @@ def build_test(fileName):
                               '--add-data',
                               'res;res',
                               '--add-data',
-                              'lx-music-source-example.js;.',
+                              'lx-music-source.js.template;.',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{sha}',
                               'main.py'])
@@ -148,7 +148,7 @@ def build_release(fileName = ''):
                               '--add-data',
                               'res;res',
                               '--add-data',
-                              'lx-music-source-example.js;.',
+                              'lx-music-source.js.template;.',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{vername}',
                               'main.py'])
