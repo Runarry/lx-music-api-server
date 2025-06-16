@@ -668,15 +668,14 @@ async def _ensure_script_download(url: str, force: bool = False) -> str | None:
 
 
 def _locate_run_external_js() -> str | None:
-    """在不同运行/打包环境下定位 run_external.js 的实际路径。"""
-    # 0) external_scripts 目录（优先使用已写入的脚本）
-    path = os.path.join(_ext_script_dir, 'run_external.js')
-
-    if os.path.exists(path):
-        return os.path.abspath(path)
-
-    # 若仍未找到，尝试写入内嵌脚本
+    """写入内嵌的 run_external.js 脚本到 external_scripts 目录。"""
     target_path = os.path.join(_ext_script_dir, 'run_external.js')
+    
+    # 如果已存在，直接返回路径
+    if os.path.exists(target_path):
+        return os.path.abspath(target_path)
+    
+    # 写入内嵌脚本
     try:
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(_RUN_EXTERNAL_JS)
