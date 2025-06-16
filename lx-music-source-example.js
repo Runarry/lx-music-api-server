@@ -1,28 +1,22 @@
 /*!
- * @name 替换为你的音乐源名称
- * @description 替换为你的音乐源介绍
- * @version v2.0.1
- * @author Folltoshe & helloplhm-qwq & lerdb
+ * @name {{MUSIC_SOURCE_NAME}}
+ * @description {{MUSIC_SOURCE_DESCRIPTION}}
+ * @version {{MUSIC_SOURCE_VERSION}}
+ * @author {{MUSIC_SOURCE_AUTHOR}}
  * @repository https://github.com/lxmusics/lx-music-api-server
  */
 
 // 是否开启开发模式
-const DEV_ENABLE = true
+const DEV_ENABLE = {{DEV_ENABLE}}
 // 是否开启更新提醒
-const UPDATE_ENABLE = true
+const UPDATE_ENABLE = {{UPDATE_ENABLE}}
 // 服务端地址
-const API_URL = 'http://127.0.0.1:9763'
+const API_URL = '{{API_URL}}'
 // 服务端配置的请求key
-const API_KEY = ''
+const API_KEY = '{{API_KEY}}'
 // 音质配置(key为音源名称,不要乱填.如果你账号为VIP可以填写到hires)
 // 全部的支持值: ['128k', '320k', 'flac', 'flac24bit']
-const MUSIC_QUALITY = {
-  kw: ['128k'],
-  kg: ['128k'],
-  tx: ['128k'],
-  wy: ['128k'],
-  mg: ['128k'],
-}
+const MUSIC_QUALITY = {{MUSIC_QUALITY}}
 // 音源配置(默认为自动生成,可以修改为手动)
 const MUSIC_SOURCE = Object.keys(MUSIC_QUALITY)
 MUSIC_SOURCE.push('local')
@@ -33,7 +27,7 @@ MUSIC_SOURCE.push('local')
 const { EVENT_NAMES, request, on, send, utils, env, version } = globalThis.lx
 
 // MD5值,用来检查更新
-const SCRIPT_MD5 = ''
+const SCRIPT_MD5 = '{{SCRIPT_MD5}}'
 
 /**
  * URL请求
@@ -101,8 +95,9 @@ const handleGetMusicUrl = async (source, musicInfo, quality) => {
   }
 
   const songId = musicInfo.hash ?? musicInfo.songmid
+  {{INFO_PAYLOAD_INJECTION}}
 
-  const request = await httpFetch(`${API_URL}/url/${source}/${songId}/${quality}`, {
+  const request = await httpFetch(`${API_URL}/url/${source}/${songId}/${quality}{{URL_QUERY_PARAMS}}`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -118,7 +113,7 @@ const handleGetMusicUrl = async (source, musicInfo, quality) => {
   switch (body.code) {
     case 0:
       console.log(`handleGetMusicUrl(${source}_${musicInfo.songmid}, ${quality}) success, URL: ${body.data}`)
-      return body.data
+      return {{RETURN_URL_PROCESSING}}
     case 1:
       console.log(`handleGetMusicUrl(${source}_${musicInfo.songmid}, ${quality}) failed: ip被封禁`)
       throw new Error('block ip')

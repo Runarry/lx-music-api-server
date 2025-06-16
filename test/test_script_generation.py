@@ -129,17 +129,31 @@ def test_script_generation():
             print("\n3. 验证生成的脚本内容...")
             
             # 检查API_URL是否被正确替换
-            if 'const API_URL = "http://test.example.com:9763"' in generated_script:
+            expected_api_url = 'const API_URL = \'http://test.example.com:9763\''
+            if expected_api_url in generated_script:
                 print("✅ API_URL 替换正确")
             else:
                 print("❌ API_URL 替换失败")
+                # 查找实际的API_URL行
+                api_url_lines = [line for line in generated_script.split('\n') if 'API_URL' in line and 'const' in line]
+                if api_url_lines:
+                    print(f"   实际的API_URL行: {api_url_lines[0].strip()}")
+                else:
+                    print("   未找到API_URL行")
                 return False
             
             # 检查API_KEY是否被正确替换
-            if 'const API_KEY = `test_key`' in generated_script:
+            expected_api_key = 'const API_KEY = \'test_key\''
+            if expected_api_key in generated_script:
                 print("✅ API_KEY 替换正确")
             else:
                 print("❌ API_KEY 替换失败")
+                # 查找实际的API_KEY行
+                api_key_lines = [line for line in generated_script.split('\n') if 'API_KEY' in line and 'const' in line]
+                if api_key_lines:
+                    print(f"   实际的API_KEY行: {api_key_lines[0].strip()}")
+                else:
+                    print("   未找到API_KEY行")
                 return False
             
             # 检查配置信息是否被正确替换
@@ -149,13 +163,33 @@ def test_script_generation():
                 print("❌ 源名称替换失败")
                 return False
             
+            # 检查其他配置信息
+            if '* @description Test description' in generated_script:
+                print("✅ 源描述替换正确")
+            else:
+                print("❌ 源描述替换失败")
+                return False
+                
+            if '* @version 1.0.0' in generated_script:
+                print("✅ 版本替换正确")
+            else:
+                print("❌ 版本替换失败")
+                return False
+                
+            if '* @author Test Author' in generated_script:
+                print("✅ 作者替换正确")
+            else:
+                print("❌ 作者替换失败")
+                return False
+            
             # 检查音质配置是否被正确替换
             expected_quality_config = lx_script.config.read_config('common.download_config.quality')
             print(f"   期望的音质配置: {json.dumps(expected_quality_config)}")
             
             # 查找生成脚本中的音质配置
             import re
-            music_quality_match = re.search(r'const MUSIC_QUALITY = JSON\.parse\(\'([^\']+)\'\)', generated_script)
+            # 现在模板直接使用JSON对象，不再使用JSON.parse
+            music_quality_match = re.search(r'const MUSIC_QUALITY = ({[^}]+})', generated_script)
             if music_quality_match:
                 actual_quality_json = music_quality_match.group(1)
                 print(f"   实际的音质配置: {actual_quality_json}")
