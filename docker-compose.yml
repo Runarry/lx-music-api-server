@@ -1,0 +1,22 @@
+services:
+  lx-music-api-server:
+    image: python:3.11-slim
+    container_name: lx-music-api-server
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./config:/app/config
+      - ./audio:/app/audio
+    working_dir: /app
+    ports:
+      - "9763:9763"
+    command: >
+      bash -c "pip install -r requirements.txt && python main.py"
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - lx-music-network
+
+networks:
+  lx-music-network:
+    driver: bridge

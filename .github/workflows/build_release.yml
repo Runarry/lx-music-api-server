@@ -11,7 +11,7 @@ jobs:
   build:
     strategy:
       matrix:
-        runs-on: [windows-latest, macos-latest, ubuntu-latest]
+        runs-on: [windows-latest]
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout git repo
@@ -80,8 +80,6 @@ jobs:
       - name: Rename Files
         run: |
           mv ./dist/dist-windows-latest/lx-music-api-server_${{ env.PACKAGE_VERSION }}.exe ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_windows.exe
-          mv ./dist/dist-macos-latest/lx-music-api-server_${{ env.PACKAGE_VERSION }} ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_macos
-          mv ./dist/dist-ubuntu-latest/lx-music-api-server_${{ env.PACKAGE_VERSION }} ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_ubuntu
       
       - name: Release
         uses: softprops/action-gh-release@v1
@@ -92,7 +90,5 @@ jobs:
           tag_name: v${{ env.PACKAGE_VERSION }}
           files: |
             ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_windows.exe
-            ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_macos
-            ./dist/lx-music-api-server_${{ env.PACKAGE_VERSION }}_ubuntu
         env:
           GITHUB_TOKEN: ${{ github.token }}
