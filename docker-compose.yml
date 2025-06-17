@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.base
+      # 指定 build 阶段的网络
+      network: host
     image: lx-music-api-server-base:latest
     profiles: ["build-base"]
 
