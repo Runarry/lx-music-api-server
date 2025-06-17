@@ -18,8 +18,7 @@ services:
     container_name: lx-music-api-server
     restart: unless-stopped
     volumes:
-      - ./config:/app/config
-      - ./audio:/app/audio
+      - ./:/app
     working_dir: /app
     ports:
       - "9763:9763"
@@ -27,8 +26,7 @@ services:
       - TZ=Asia/Shanghai
     networks:
       - lx-music-network
-    depends_on:
-      - lx-music-api-server-base
+
 
 networks:
   lx-music-network:
