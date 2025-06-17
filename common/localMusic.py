@@ -353,9 +353,10 @@ def initMain():
 async def generateAudioFileResonse(name):
     """根据文件名返回音频文件流"""
     try:
-        w = map.get(name) or map.get(os.path.basename(name))
+        filename = os.path.basename(name)
+        w = map.get(filename)
         return aiohttp.web.FileResponse(w['filepath'])
-    except KeyError:
+    except (KeyError, TypeError):
         return {
             'code': 2,
             'msg': '未找到文件',
@@ -365,13 +366,14 @@ async def generateAudioFileResonse(name):
 async def generateAudioCoverResonse(name):
     """根据文件名返回封面图文件流"""
     try:
-        w = map.get(name) or map.get(os.path.basename(name))
+        filename = os.path.basename(name)
+        w = map.get(filename)
         if (not os.path.exists(w['cover_path'])):
             p = writeAudioCover(w['filepath'])
             logger.debug(f"生成音乐封面文件 {w['cover_path']} 成功")
             return aiohttp.web.FileResponse(p)
         return aiohttp.web.FileResponse(w['cover_path'])
-    except KeyError:
+    except (KeyError, TypeError):
         return {
             'code': 2,
             'msg': '未找到封面',
@@ -388,9 +390,10 @@ async def generateAudioCoverResonse(name):
 async def generateAudioLyricResponse(name):
     """根据文件名返回歌词文本"""
     try:
-        w = map.get(name) or map.get(os.path.basename(name))
+        filename = os.path.basename(name)
+        w = map.get(filename)
         return w['lyrics']
-    except KeyError:
+    except (KeyError, TypeError):
         return {
             'code': 2,
             'msg': '未找到歌词',
@@ -399,15 +402,15 @@ async def generateAudioLyricResponse(name):
 
 def checkLocalMusic(name):
     """检查指定文件名的音频、封面、歌词是否存在"""
-    key = name if name in map else os.path.basename(name)
-    if key not in map:
+    filename = os.path.basename(name)
+    if filename not in map:
         # 文件名本身未收录，则全部视为不存在
         return {
             'file': False,
             'cover': False,
             'lyric': False
         }
-    w = map[key]
+    w = map[filename]
     return {
         'file': os.path.exists(w['filepath']),
         'cover': os.path.exists(w['cover_path']),
@@ -415,4 +418,5 @@ def checkLocalMusic(name):
     }
 
 def hasMusic(name):
-    return (name in map) or (os.path.basename(name) in map)
+    filename = os.path.basename(name)
+    return filename in map
