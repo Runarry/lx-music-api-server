@@ -43,6 +43,8 @@ jobs:
     steps:
       - name: Checkout git repo
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
       
       - name: Setup Python 3.11
         uses: actions/setup-python@v2
@@ -56,7 +58,7 @@ jobs:
           
       - name: Generate Changelog
         run: |
-          git fetch --prune --unshallow --tags
+          git fetch --prune  --tags
           python build.py changelog >> ./changelog.md
       
       - name: Create git tag
