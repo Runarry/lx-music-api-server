@@ -11,9 +11,6 @@ services:
 
   # 主服务
   lx-music-api-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: lx-music-api-server:latest
     container_name: lx-music-api-server
     restart: unless-stopped
@@ -22,10 +19,12 @@ services:
     working_dir: /app
     ports:
       - "9763:9763"
+    command: ["python", "main.py"]
     environment:
       - TZ=Asia/Shanghai
     networks:
       - lx-music-network
+
 
 
 networks:
