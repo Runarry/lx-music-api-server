@@ -1,21 +1,32 @@
 services:
+  # 构建基础镜像
+  lx-music-api-server-base:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: lx-music-api-server-base:latest
+    profiles: ["build-base"]
+
+  # 主服务
   lx-music-api-server:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lx-music-api-server:latest
     container_name: lx-music-api-server
     restart: unless-stopped
     volumes:
-      - ./:/app
       - ./config:/app/config
       - ./audio:/app/audio
     working_dir: /app
     ports:
       - "9763:9763"
-    command: >
-      bash -c "pip install -r requirements.txt && python main.py"
     environment:
       - TZ=Asia/Shanghai
     networks:
       - lx-music-network
+    depends_on:
+      - lx-music-api-server-base
 
 networks:
   lx-music-network:

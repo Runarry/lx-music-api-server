@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+# 设置时区并安装Node.js
+RUN apt-get update && apt-get install -y tzdata nodejs npm && \
+    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 创建工作目录
+WORKDIR /app
+
+# 复制依赖文件
+COPY requirements.txt /app/
+
+# 安装Python依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 设置标签
+LABEL maintainer="LX Music API Server" \
+      description="LX Music API Server Base Image with Python 3.11 and Node.js"
