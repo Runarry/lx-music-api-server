@@ -1,24 +1,21 @@
 FROM python:3.11-slim
 
-# 设置DNS服务器以确保网络连接
-RUN echo "nameserver 8.8.8.8\nnameserver 8.8.4.4" > /etc/resolv.conf
+# 替换为阿里云 bookworm 源（与python:3.11-slim保持一致）
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list && \
+    sed -i 's@security.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list
 
-# 使用国内镜像源
-RUN echo "deb http://mirrors.aliyun.com/debian/ bullseye main non-free contrib\n\
-deb http://mirrors.aliyun.com/debian/ bullseye-updates main non-free contrib\n\
-deb http://mirrors.aliyun.com/debian/ bullseye-backports main non-free contrib\n\
-deb http://mirrors.aliyun.com/debian-security/ bullseye-security main non-free contrib" > /etc/apt/sources.list
-
-# 设置时区并安装必要的依赖
-RUN apt-get update && apt-get install -y tzdata curl gnupg && \
+# 安装依赖和设置时区
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tzdata curl gnupg ca-certificates && \
     ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata
 
-# 安装 Node.js
+# 安装 Node.js 18（nodesource 源，适配 bookworm）
 RUN mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && apt-get install -y nodejs && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -28,9 +25,9 @@ WORKDIR /app
 # 复制依赖文件
 COPY requirements.txt /app/
 
-# 安装Python依赖
+# 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 设置标签
 LABEL maintainer="LX Music API Server" \
-      description="LX Music API Server Base Image with Python 3.11 and Node.js"
+    description="LX Music API Server Base Image with Python 3.11 and Node.js"
