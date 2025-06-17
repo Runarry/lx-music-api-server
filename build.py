@@ -15,10 +15,17 @@ def get_specified_tag(index):
     for i in r:
         if (i):
             n.append(i.strip())
+    if len(n) == 0:
+        return None
     return n[index]
 
 def get_changelog():
-    cmd = ['git', 'log', f'{get_specified_tag(-1)}..HEAD', '--pretty=format:"%h %s"']
+    last_tag = get_specified_tag(-1)
+    if last_tag is None:
+        # No tags found, get all commits
+        cmd = ['git', 'log', '--pretty=format:"%h %s"']
+    else:
+        cmd = ['git', 'log', f'{last_tag}..HEAD', '--pretty=format:"%h %s"']
     # print(cmd)
     res = subprocess.check_output(cmd).decode('utf-8').strip()
     res = res.split('\n')
@@ -30,7 +37,7 @@ def get_changelog():
     noticeMsg = []
     unknownMsg = []
     for msg in res:
-        if (re.match('[a-f0-9]*.(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|notice).*?\(?.*?\)?\:', msg[1:-1])):
+        if (re.match(r'[a-f0-9]*.(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|notice).*?\(?.*?\)?:', msg[1:-1])):
             msg = msg[1:-1]
             if msg[8:].startswith('notice'):
                 noticeMsg.append(msg)
