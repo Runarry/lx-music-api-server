@@ -11,7 +11,7 @@ services:
 
   # 主服务
   lx-music-api-server:
-    image: lx-music-api-server:latest
+    image: lx-music-api-server-base:latest
     container_name: lx-music-api-server
     restart: unless-stopped
     volumes:
