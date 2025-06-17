@@ -100,6 +100,9 @@ def build_test(fileName):
 
     sha = get_latest_commit_sha()
 
+    # Use appropriate separator for --add-data based on platform
+    separator = ';' if os.name == 'nt' else ':'
+    
     popen = subprocess.Popen([get_python_path(),
                               '-m',
                               'PyInstaller',
@@ -107,9 +110,9 @@ def build_test(fileName):
                               '-i',
                               'res/icon.ico',
                               '--add-data',
-                              'res;res',
+                              f'res{separator}res',
                               '--add-data',
-                              'lx-music-source.js.template;.',
+                              f'lx-music-source.js.template',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{sha}',
                               'main.py'])
@@ -139,6 +142,9 @@ def build_release(fileName = ''):
 
     vername = toml.load("./pyproject.toml")["tool"]["poetry"]["version"]
 
+    # Use appropriate separator for --add-data based on platform
+    separator = ';' if os.name == 'nt' else ':'
+    
     popen = subprocess.Popen([get_python_path(),
                               '-m',
                               'PyInstaller',
@@ -146,9 +152,9 @@ def build_release(fileName = ''):
                               '-i',
                               'res/icon.ico',
                               '--add-data',
-                              'res;res',
+                              f'res{separator}res',
                               '--add-data',
-                              'lx-music-source.js.template;.',
+                              f'lx-music-source.js.template{separator}.',
                               '--name',
                               fileName if fileName else f'lx-music-api-server_{vername}',
                               'main.py'])
