@@ -334,7 +334,7 @@ async def initMain():
     variable.aioSession = aiohttp.ClientSession(trust_env=True)
     asyncio.create_task(checkcn_async())
     try:
-        await modules.refresh_external_scripts()
+        await modules.external_script.refresh_external_scripts()
     except Exception:
         logger.warning('刷新外部脚本失败\n' + traceback.format_exc())
     localMusic.initMain()
