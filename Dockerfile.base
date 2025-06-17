@@ -1,14 +1,17 @@
 FROM python:3.11-slim
 
-# 替换为阿里云 bookworm 源（与python:3.11-slim保持一致）
-RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list && \
-    sed -i 's@security.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list
+# 直接覆盖 sources.list
+RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main non-free contrib\n\
+    deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free contrib\n\
+    deb http://mirrors.aliyun.com/debian/ bookworm-backports main non-free contrib\n\
+    deb http://mirrors.aliyun.com/debian-security bookworm-security main non-free contrib" > /etc/apt/sources.list
 
-# 安装依赖和设置时区
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tzdata curl gnupg ca-certificates && \
     ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata
+
+
 
 # 安装 Node.js 18（nodesource 源，适配 bookworm）
 RUN mkdir -p /etc/apt/keyrings && \
