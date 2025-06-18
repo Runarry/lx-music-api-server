@@ -344,8 +344,27 @@ def initMain():
     else:
         audios = findAudios(cache['audios'])
         writeLocalCache(audios)
+    
+    # 清空map以防止旧数据干扰
+    global map
+    map = {}
+    
+    # 使用规范化的文件名构建map
     for a in audios:
-        map[os.path.basename(a['filepath'])] = a
+        original_filename = os.path.basename(a['filepath'])
+        normalized_filename = normalize_filename(original_filename)
+        
+        # 在Linux/Mac上同时存储原始文件名和小写版本，以提高兼容性
+        if platform.system() != 'Windows':
+            map[normalized_filename] = a
+            map[normalized_filename.lower()] = a
+        else:
+            map[normalized_filename] = a
+            
+        # 记录日志，帮助调试
+        if original_filename != normalized_filename:
+            logger.debug(f"文件名规范化: {original_filename} -> {normalized_filename}")
+    
     logger.info("初始化本地音乐成功")
     logger.debug(f'本地音乐列表: {audios}')
     logger.debug(f'本地音乐map: {map}')
@@ -353,70 +372,329 @@ def initMain():
 async def generateAudioFileResonse(name):
     """根据文件名返回音频文件流"""
     try:
-        filename = os.path.basename(name)
-        w = map.get(filename)
+        # 使用规范化的文件名
+        filename = normalize_filename(name)
+        
+        # 在Linux/Mac上尝试使用小写文件名
+        if platform.system() != 'Windows':
+            w = map.get(filename) or map.get(filename.lower())
+        else:
+            w = map.get(filename)
+        
+        # 检查是否找到文件信息
+        if w is None:
+            logger.warning(f"未在map中找到文件: {filename}")
+            return {
+                'code': 2,
+                'msg': '未找到文件',
+                'data': None
+            }, 404
+        
+        # 检查文件是否存在
+        if not os.path.exists(w['filepath']):
+            logger.warning(f"文件不存在: {w['filepath']}")
+            return {
+                'code': 2,
+                'msg': '文件不存在或无法访问',
+                'data': None
+            }, 404
+            
+        # 检查文件是否可读
+        if not os.access(w['filepath'], os.R_OK):
+            logger.warning(f"文件无法读取: {w['filepath']}")
+            return {
+                'code': 2,
+                'msg': '文件无法读取',
+                'data': None
+            }, 403
+        
+        # 返回文件响应
         return aiohttp.web.FileResponse(w['filepath'])
-    except (KeyError, TypeError):
+    except (KeyError, TypeError) as e:
+        logger.error(f"获取音频文件时出现KeyError或TypeError: {str(e)}")
         return {
             'code': 2,
             'msg': '未找到文件',
             'data': None
         }, 404
+    except FileNotFoundError as e:
+        logger.error(f"获取音频文件时出现FileNotFoundError: {str(e)}")
+        return {
+            'code': 2,
+            'msg': '文件不存在',
+            'data': None
+        }, 404
+    except PermissionError as e:
+        logger.error(f"获取音频文件时出现PermissionError: {str(e)}")
+        return {
+            'code': 2,
+            'msg': '无权限访问文件',
+            'data': None
+        }, 403
+    except OSError as e:
+        logger.error(f"获取音频文件时出现OSError: {str(e)}")
+        return {
+            'code': 2,
+            'msg': '文件系统错误',
+            'data': None
+        }, 500
+    except Exception as e:
+        logger.error(f"获取音频文件时出现未知错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            'code': 2,
+            'msg': '服务器内部错误',
+            'data': None
+        }, 500
 
 async def generateAudioCoverResonse(name):
     """根据文件名返回封面图文件流"""
     try:
-        filename = os.path.basename(name)
-        w = map.get(filename)
-        if (not os.path.exists(w['cover_path'])):
-            p = writeAudioCover(w['filepath'])
-            logger.debug(f"生成音乐封面文件 {w['cover_path']} 成功")
-            return aiohttp.web.FileResponse(p)
+        # 使用规范化的文件名
+        filename = normalize_filename(name)
+        
+        # 在Linux/Mac上尝试使用小写文件名
+        if platform.system() != 'Windows':
+            w = map.get(filename) or map.get(filename.lower())
+        else:
+            w = map.get(filename)
+        
+        # 检查是否找到文件信息
+        if w is None:
+            logger.warning(f"未在map中找到文件: {filename}")
+            return {
+                'code': 2,
+                'msg': '未找到封面',
+                'data': None
+            }, 404
+        
+        # 检查音频文件是否存在
+        if not os.path.exists(w['filepath']):
+            logger.warning(f"音频文件不存在: {w['filepath']}")
+            return {
+                'code': 2,
+                'msg': '音频文件不存在或无法访问',
+                'data': None
+            }, 404
+        
+        # 检查封面是否存在，不存在则尝试生成
+        if not w.get('cover_path') or not os.path.exists(w['cover_path']):
+            try:
+                p = writeAudioCover(w['filepath'])
+                if p and os.path.exists(p):
+                    logger.debug(f"生成音乐封面文件成功: {p}")
+                    return aiohttp.web.FileResponse(p)
+                else:
+                    logger.warning(f"生成音乐封面文件失败: {w['filepath']}")
+                    return {
+                        'code': 2,
+                        'msg': '无法生成封面',
+                        'data': None
+                    }, 404
+            except Exception as e:
+                logger.error(f"生成封面时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                return {
+                    'code': 2,
+                    'msg': '生成封面时出错',
+                    'data': None
+                }, 500
+        
+        # 检查封面文件是否可读
+        if not os.access(w['cover_path'], os.R_OK):
+            logger.warning(f"封面文件无法读取: {w['cover_path']}")
+            return {
+                'code': 2,
+                'msg': '封面文件无法读取',
+                'data': None
+            }, 403
+        
+        # 返回封面文件响应
         return aiohttp.web.FileResponse(w['cover_path'])
-    except (KeyError, TypeError):
+    except (KeyError, TypeError) as e:
+        logger.error(f"获取封面时出现KeyError或TypeError: {str(e)}")
         return {
             'code': 2,
             'msg': '未找到封面',
             'data': None
         }, 404
-    except Exception:
-        logger.debug(traceback.format_exc())
+    except FileNotFoundError as e:
+        logger.error(f"获取封面时出现FileNotFoundError: {str(e)}")
         return {
             'code': 2,
-            'msg': '未找到封面',
+            'msg': '封面文件不存在',
             'data': None
         }, 404
+    except PermissionError as e:
+        logger.error(f"获取封面时出现PermissionError: {str(e)}")
+        return {
+            'code': 2,
+            'msg': '无权限访问封面文件',
+            'data': None
+        }, 403
+    except OSError as e:
+        logger.error(f"获取封面时出现OSError: {str(e)}")
+        return {
+            'code': 2,
+            'msg': '文件系统错误',
+            'data': None
+        }, 500
+    except Exception as e:
+        logger.error(f"获取封面时出现未知错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            'code': 2,
+            'msg': '服务器内部错误',
+            'data': None
+        }, 500
 
 async def generateAudioLyricResponse(name):
     """根据文件名返回歌词文本"""
     try:
-        filename = os.path.basename(name)
-        w = map.get(filename)
+        # 使用规范化的文件名
+        filename = normalize_filename(name)
+        
+        # 在Linux/Mac上尝试使用小写文件名
+        if platform.system() != 'Windows':
+            w = map.get(filename) or map.get(filename.lower())
+        else:
+            w = map.get(filename)
+        
+        # 检查是否找到文件信息
+        if w is None:
+            logger.warning(f"未在map中找到文件: {filename}")
+            return {
+                'code': 2,
+                'msg': '未找到歌词',
+                'data': None
+            }, 404
+        
+        # 检查音频文件是否存在
+        if not os.path.exists(w['filepath']):
+            logger.warning(f"音频文件不存在: {w['filepath']}")
+            return {
+                'code': 2,
+                'msg': '音频文件不存在或无法访问',
+                'data': None
+            }, 404
+        
+        # 检查歌词是否存在
+        if not w.get('lyrics'):
+            logger.warning(f"歌词不存在: {filename}")
+            return {
+                'code': 2,
+                'msg': '未找到歌词',
+                'data': None
+            }, 404
+        
+        # 返回歌词文本
         return w['lyrics']
-    except (KeyError, TypeError):
+    except (KeyError, TypeError) as e:
+        logger.error(f"获取歌词时出现KeyError或TypeError: {str(e)}")
         return {
             'code': 2,
             'msg': '未找到歌词',
             'data': None
         }, 404
+    except Exception as e:
+        logger.error(f"获取歌词时出现未知错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            'code': 2,
+            'msg': '服务器内部错误',
+            'data': None
+        }, 500
 
 def checkLocalMusic(name):
     """检查指定文件名的音频、封面、歌词是否存在"""
-    filename = os.path.basename(name)
-    if filename not in map:
-        # 文件名本身未收录，则全部视为不存在
+    try:
+        # 使用规范化的文件名
+        filename = normalize_filename(name)
+        
+        # 在Linux/Mac上尝试使用小写文件名
+        if platform.system() != 'Windows':
+            w = map.get(filename) or map.get(filename.lower())
+        else:
+            w = map.get(filename)
+        
+        if w is None:
+            # 文件名本身未收录，则全部视为不存在
+            logger.debug(f"未在map中找到文件: {filename}")
+            return {
+                'file': False,
+                'cover': False,
+                'lyric': False
+            }
+        
+        # 检查文件是否存在并可读
+        file_exists = os.path.exists(w['filepath']) and os.access(w['filepath'], os.R_OK)
+        
+        # 检查封面是否存在并可读
+        cover_exists = w.get('cover_path') and os.path.exists(w['cover_path']) and os.access(w['cover_path'], os.R_OK)
+        
+        # 检查歌词是否存在
+        lyric_exists = bool(w.get('lyrics'))
+        
+        return {
+            'file': file_exists,
+            'cover': cover_exists,
+            'lyric': lyric_exists
+        }
+    except Exception as e:
+        logger.error(f"检查音乐文件时出现错误: {str(e)}")
+        logger.error(traceback.format_exc())
         return {
             'file': False,
             'cover': False,
             'lyric': False
         }
-    w = map[filename]
-    return {
-        'file': os.path.exists(w['filepath']),
-        'cover': os.path.exists(w['cover_path']),
-        'lyric': bool(w['lyrics'])
-    }
+
+def normalize_filename(filename):
+    """
+    规范化文件名，确保在不同平台上一致处理文件名
+    
+    处理内容：
+    1. 提取文件名（如果是路径）
+    2. URL解码（处理%编码的字符）
+    3. Unicode规范化（使用NFC形式，解决中文等字符在不同系统上的表示差异）
+    4. 处理大小写（在不区分大小写的系统上统一使用小写比较）
+    5. 处理空白字符（统一处理空格、制表符等）
+    """
+    # 提取文件名（如果是路径）
+    filename = os.path.basename(filename)
+    
+    # URL解码（处理%编码的字符）
+    try:
+        from urllib.parse import unquote
+        filename = unquote(filename)
+    except Exception as e:
+        logger.warning(f"URL解码文件名失败: {filename}, 错误: {str(e)}")
+    
+    # Unicode规范化（使用NFC形式）
+    try:
+        import unicodedata
+        filename = unicodedata.normalize('NFC', filename)
+    except Exception as e:
+        logger.warning(f"Unicode规范化文件名失败: {filename}, 错误: {str(e)}")
+    
+    # 处理空白字符（统一处理空格、制表符等）
+    filename = ' '.join(filename.split())
+    
+    # 在Windows上不区分大小写，但在Linux/Mac上区分
+    # 为了兼容性，在Linux/Mac上也使用小写进行比较
+    if platform.system() != 'Windows':
+        # 仅在非Windows系统上转换为小写用于比较
+        # 注意：这里返回的是原始文件名，但在map中存储时会使用小写作为键
+        return filename
+    else:
+        return filename
 
 def hasMusic(name):
-    filename = os.path.basename(name)
-    return filename in map
+    filename = normalize_filename(name)
+    
+    # 在Linux/Mac上区分大小写，需要特殊处理
+    if platform.system() != 'Windows':
+        # 使用小写比较以提高兼容性
+        return filename.lower() in map or filename in map
+    else:
+        return filename in map
