@@ -330,69 +330,123 @@ def dumpLocalCache():
 def initMain():
     global FFMPEG_PATH
     FFMPEG_PATH = check_ffmpeg()
-    logger.debug('找到的ffmpeg命令: ' + str(FFMPEG_PATH))
+    logger.debug('[initMain] 找到的ffmpeg命令: ' + str(FFMPEG_PATH))
     if (not os.path.exists(AUDIO_PATH)):
         os.mkdir(AUDIO_PATH)
-        logger.info(f"创建本地音乐文件夹 {AUDIO_PATH}")
+        logger.info(f"[initMain] 创建本地音乐文件夹 {AUDIO_PATH}")
     if (not os.path.exists(TEMP_PATH)):
         os.mkdir(TEMP_PATH)
-        logger.info(f"创建本地音乐临时文件夹 {TEMP_PATH}")
+        logger.info(f"[initMain] 创建本地音乐临时文件夹 {TEMP_PATH}")
     global audios
     cache = dumpLocalCache()
     if (cache['file_list'] == os.listdir(AUDIO_PATH)):
+        logger.debug(f"[initMain] 文件列表未变化，使用缓存数据")
         audios = cache['audios']
     else:
+        logger.debug(f"[initMain] 文件列表已变化，重新扫描音频文件")
         audios = findAudios(cache['audios'])
         writeLocalCache(audios)
     
     # 清空map以防止旧数据干扰
     global map
+    original_map_size = len(map) if map else 0
+    logger.debug(f"[initMain] 清空map前的大小: {original_map_size}")
     map = {}
     
     # 使用规范化的文件名构建map
+    normalized_count = 0
+    lowercase_count = 0
+    current_os = platform.system()
+    
     for a in audios:
         original_filename = os.path.basename(a['filepath'])
         normalized_filename = normalize_filename(original_filename)
+        normalized_count += 1
         
         # 在Linux/Mac上同时存储原始文件名和小写版本，以提高兼容性
-        if platform.system() != 'Windows':
+        if current_os != 'Windows':
             map[normalized_filename] = a
-            map[normalized_filename.lower()] = a
+            lowercase_name = normalized_filename.lower()
+            if lowercase_name != normalized_filename:  # 避免重复存储相同的键
+                map[lowercase_name] = a
+                lowercase_count += 1
         else:
             map[normalized_filename] = a
             
         # 记录日志，帮助调试
         if original_filename != normalized_filename:
-            logger.debug(f"文件名规范化: {original_filename} -> {normalized_filename}")
+            logger.debug(f"[initMain] 文件名规范化: {original_filename} -> {normalized_filename}")
     
-    logger.info("初始化本地音乐成功")
-    logger.debug(f'本地音乐列表: {audios}')
-    logger.debug(f'本地音乐map: {map}')
+    logger.info(f"[initMain] 初始化本地音乐成功，共 {len(audios)} 个音频文件，规范化 {normalized_count} 个，添加小写索引 {lowercase_count} 个")
+    logger.debug(f"[initMain] map最终大小: {len(map)}")
+    
+    # 输出部分map键以便调试
+    map_keys = list(map.keys())[:5] if len(map) > 5 else list(map.keys())
+    logger.debug(f"[initMain] map中的前5个键: {map_keys}")
+    logger.debug(f'[initMain] 本地音乐列表: {audios[:2] if len(audios) > 2 else audios}')
+    logger.debug(f'[initMain] 本地音乐map样例: {dict(list(map.items())[:2]) if len(map) > 2 else map}')
 
 async def generateAudioFileResonse(name):
-    """根据文件名返回音频文件流"""
+    """
+    生成音频文件响应
+    """
+    logger.debug(f"[generateAudioFileResonse] 开始处理音频文件请求: {name}")
+    
     try:
-        # 使用规范化的文件名
-        filename = normalize_filename(name)
+        # 规范化文件名
+        normalized_name = normalize_filename(name)
+        logger.debug(f"[generateAudioFileResonse] 规范化后的文件名: {normalized_name}")
         
-        # 在Linux/Mac上尝试使用小写文件名
-        if platform.system() != 'Windows':
-            w = map.get(filename) or map.get(filename.lower())
+        # 尝试直接查找规范化后的文件名
+        if normalized_name in map:
+            audio_info = map[normalized_name]
+            logger.debug(f"[generateAudioFileResonse] 在map中找到精确匹配: {normalized_name}")
         else:
-            w = map.get(filename)
+            # 在非Windows系统上尝试不区分大小写的查找
+            current_os = platform.system()
+            if current_os != 'Windows':
+                normalized_name_lower = normalized_name.lower()
+                logger.debug(f"[generateAudioFileResonse] 非Windows系统({current_os})，尝试小写匹配: {normalized_name_lower}")
+                
+                if normalized_name_lower in map:
+                    audio_info = map[normalized_name_lower]
+                    logger.debug(f"[generateAudioFileResonse] 在map中找到小写匹配: {normalized_name_lower}")
+                else:
+                    # 调试输出map中的部分键，帮助诊断问题
+                    map_keys = list(map.keys())[:10] if len(map) > 10 else list(map.keys())
+                    logger.debug(f"[generateAudioFileResonse] 未找到匹配，map中的前10个键: {map_keys}")
+                    logger.warning(f"未在map中找到文件: {name} (规范化: {normalized_name}, 小写: {normalized_name_lower})")
+                    return {
+                        'code': 2,
+                        'msg': '未找到文件',
+                        'data': None
+                    }, 404
+            else:
+                logger.debug(f"[generateAudioFileResonse] Windows系统，不需要额外的小写匹配")
+                # 调试输出map中的部分键，帮助诊断问题
+                map_keys = list(map.keys())[:10] if len(map) > 10 else list(map.keys())
+                logger.debug(f"[generateAudioFileResonse] 未找到匹配，map中的前10个键: {map_keys}")
+                logger.warning(f"未在map中找到文件: {name} (规范化: {normalized_name})")
+                return {
+                    'code': 2,
+                    'msg': '未找到文件',
+                    'data': None
+                }, 404
         
-        # 检查是否找到文件信息
-        if w is None:
-            logger.warning(f"未在map中找到文件: {filename}")
+        # 检查文件是否存在
+        filepath = audio_info.get('filepath')
+        logger.debug(f"[generateAudioFileResonse] 获取到文件路径: {filepath}")
+        
+        if not filepath:
+            logger.error(f"[generateAudioFileResonse] 文件路径为空")
             return {
                 'code': 2,
-                'msg': '未找到文件',
+                'msg': '文件路径无效',
                 'data': None
             }, 404
         
-        # 检查文件是否存在
-        if not os.path.exists(w['filepath']):
-            logger.warning(f"文件不存在: {w['filepath']}")
+        if not os.path.exists(filepath):
+            logger.warning(f"文件不存在: {filepath}")
             return {
                 'code': 2,
                 'msg': '文件不存在或无法访问',
@@ -400,8 +454,8 @@ async def generateAudioFileResonse(name):
             }, 404
             
         # 检查文件是否可读
-        if not os.access(w['filepath'], os.R_OK):
-            logger.warning(f"文件无法读取: {w['filepath']}")
+        if not os.access(filepath, os.R_OK):
+            logger.warning(f"文件无法读取: {filepath}")
             return {
                 'code': 2,
                 'msg': '文件无法读取',
@@ -409,7 +463,8 @@ async def generateAudioFileResonse(name):
             }, 403
         
         # 返回文件响应
-        return aiohttp.web.FileResponse(w['filepath'])
+        logger.debug(f"[generateAudioFileResonse] 返回文件响应: {filepath}")
+        return aiohttp.web.FileResponse(filepath)
     except (KeyError, TypeError) as e:
         logger.error(f"获取音频文件时出现KeyError或TypeError: {str(e)}")
         return {
@@ -660,41 +715,94 @@ def normalize_filename(filename):
     4. 处理大小写（在不区分大小写的系统上统一使用小写比较）
     5. 处理空白字符（统一处理空格、制表符等）
     """
+    logger.debug(f"[normalize_filename] 开始处理文件名: {filename}")
+    
     # 提取文件名（如果是路径）
+    original_filename = filename
     filename = os.path.basename(filename)
+    if original_filename != filename:
+        logger.debug(f"[normalize_filename] 提取文件名: {original_filename} -> {filename}")
     
     # URL解码（处理%编码的字符）
     try:
         from urllib.parse import unquote
-        filename = unquote(filename)
+        decoded_filename = unquote(filename)
+        if decoded_filename != filename:
+            logger.debug(f"[normalize_filename] URL解码: {filename} -> {decoded_filename}")
+        filename = decoded_filename
     except Exception as e:
-        logger.warning(f"URL解码文件名失败: {filename}, 错误: {str(e)}")
+        logger.warning(f"[normalize_filename] URL解码文件名失败: {filename}, 错误: {str(e)}")
     
     # Unicode规范化（使用NFC形式）
     try:
         import unicodedata
-        filename = unicodedata.normalize('NFC', filename)
+        normalized_filename = unicodedata.normalize('NFC', filename)
+        if normalized_filename != filename:
+            logger.debug(f"[normalize_filename] Unicode规范化: {filename} -> {normalized_filename}")
+            # 输出十六进制表示，便于调试Unicode差异
+            logger.debug(f"[normalize_filename] Unicode十六进制 - 原始: {' '.join([hex(ord(c)) for c in filename])}")
+            logger.debug(f"[normalize_filename] Unicode十六进制 - 规范化: {' '.join([hex(ord(c)) for c in normalized_filename])}")
+        filename = normalized_filename
     except Exception as e:
-        logger.warning(f"Unicode规范化文件名失败: {filename}, 错误: {str(e)}")
+        logger.warning(f"[normalize_filename] Unicode规范化文件名失败: {filename}, 错误: {str(e)}")
     
     # 处理空白字符（统一处理空格、制表符等）
-    filename = ' '.join(filename.split())
+    whitespace_normalized = ' '.join(filename.split())
+    if whitespace_normalized != filename:
+        logger.debug(f"[normalize_filename] 空白字符规范化: {filename} -> {whitespace_normalized}")
+    filename = whitespace_normalized
     
     # 在Windows上不区分大小写，但在Linux/Mac上区分
     # 为了兼容性，在Linux/Mac上也使用小写进行比较
-    if platform.system() != 'Windows':
+    current_os = platform.system()
+    logger.debug(f"[normalize_filename] 当前操作系统: {current_os}")
+    
+    if current_os != 'Windows':
         # 仅在非Windows系统上转换为小写用于比较
         # 注意：这里返回的是原始文件名，但在map中存储时会使用小写作为键
-        return filename
+        logger.debug(f"[normalize_filename] 非Windows系统，保留原始大小写: {filename}")
+        logger.debug(f"[normalize_filename] 小写版本将用于索引: {filename.lower()}")
     else:
-        return filename
+        logger.debug(f"[normalize_filename] Windows系统，文件名不区分大小写: {filename}")
+    
+    logger.debug(f"[normalize_filename] 规范化完成: {original_filename} -> {filename}")
+    return filename
 
 def hasMusic(name):
-    filename = normalize_filename(name)
+    """
+    检查音乐文件是否存在
+    """
+    logger.debug(f"[hasMusic] 检查音乐文件是否存在: {name}")
     
-    # 在Linux/Mac上区分大小写，需要特殊处理
-    if platform.system() != 'Windows':
-        # 使用小写比较以提高兼容性
-        return filename.lower() in map or filename in map
+    if not name:
+        logger.debug(f"[hasMusic] 文件名为空，返回False")
+        return False
+    
+    # 规范化文件名
+    normalized_name = normalize_filename(name)
+    logger.debug(f"[hasMusic] 规范化后的文件名: {normalized_name}")
+    
+    # 直接查找规范化后的文件名
+    if normalized_name in map:
+        logger.debug(f"[hasMusic] 在map中找到精确匹配: {normalized_name}")
+        return True
+    
+    # 在非Windows系统上尝试不区分大小写的查找
+    current_os = platform.system()
+    if current_os != 'Windows':
+        # 转换为小写进行查找
+        normalized_name_lower = normalized_name.lower()
+        logger.debug(f"[hasMusic] 非Windows系统({current_os})，尝试小写匹配: {normalized_name_lower}")
+        
+        if normalized_name_lower in map:
+            logger.debug(f"[hasMusic] 在map中找到小写匹配: {normalized_name_lower}")
+            return True
+        else:
+            # 调试输出map中的部分键，帮助诊断问题
+            map_keys = list(map.keys())[:10] if len(map) > 10 else list(map.keys())
+            logger.debug(f"[hasMusic] 未找到匹配，map中的前10个键: {map_keys}")
     else:
-        return filename in map
+        logger.debug(f"[hasMusic] Windows系统，不需要额外的小写匹配")
+    
+    logger.debug(f"[hasMusic] 未找到音乐文件: {name}")
+    return False
