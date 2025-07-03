@@ -292,8 +292,8 @@ async def url(source, songId, quality, query={}):
                     cache_filename = f"{source}_{songId}_{ext_res['quality']}{_ext}"
                     cache_filepath = os.path.join(_remote_cache_dir, cache_filename)
                     if not os.path.exists(cache_filepath):
-                        # 对 external script 返回的音频进行同步缓存，确保函数返回前已完成保存
-                        await _download_audio_to_cache(ext_res['url'], cache_filepath, source, songId)
+                        # 将 external script 返回的音频下载改为后台异步任务，避免阻塞当前请求
+                        asyncio.create_task(_download_audio_to_cache(ext_res['url'], cache_filepath, source, songId))
             except Exception:
                 logger.warning('音频缓存调度失败(来自 external script)\n' + traceback.format_exc())
 
