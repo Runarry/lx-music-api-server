@@ -355,30 +355,37 @@ def initMain():
     
     # 使用规范化的文件名构建map
     normalized_count = 0
-    lowercase_count = 0
-    current_os = platform.system()
+    variations_count = 0
     
     for a in audios:
         original_filename = os.path.basename(a['filepath'])
         normalized_filename = normalize_filename(original_filename)
         normalized_count += 1
         
-        # 在Linux/Mac上同时存储原始文件名和小写版本，以提高兼容性
-        if current_os != 'Windows':
-            map[normalized_filename] = a
-            lowercase_name = normalized_filename.lower()
-            if lowercase_name != normalized_filename:  # 避免重复存储相同的键
-                map[lowercase_name] = a
-                lowercase_count += 1
-        else:
-            map[normalized_filename] = a
-            
-        # 记录日志，帮助调试
+        # 存储多个变体以提高跨平台兼容性
+        # 1. 规范化后的文件名
+        map[normalized_filename] = a
+        
+        # 2. 小写版本（解决大小写敏感问题）
+        lowercase_name = normalized_filename.lower()
+        if lowercase_name != normalized_filename:
+            map[lowercase_name] = a
+            variations_count += 1
+        
+        # 3. 原始文件名（未规范化）
         if original_filename != normalized_filename:
+            map[original_filename] = a
+            variations_count += 1
             logger.debug(f"[initMain] 文件名规范化: {original_filename} -> {normalized_filename}")
+        
+        # 4. 原始文件名的小写版本
+        original_lowercase = original_filename.lower()
+        if original_lowercase != original_filename and original_lowercase != lowercase_name:
+            map[original_lowercase] = a
+            variations_count += 1
     
-    logger.info(f"[initMain] 初始化本地音乐成功，共 {len(audios)} 个音频文件，规范化 {normalized_count} 个，添加小写索引 {lowercase_count} 个")
-    logger.debug(f"[initMain] map最终大小: {len(map)}")
+    logger.info(f"[initMain] 初始化本地音乐成功，共 {len(audios)} 个音频文件，生成 {len(map)} 个索引项")
+    logger.debug(f"[initMain] 规范化 {normalized_count} 个文件名，添加 {variations_count} 个变体索引")
     
     # 输出部分map键以便调试
     map_keys = list(map.keys())[:5] if len(map) > 5 else list(map.keys())
@@ -708,50 +715,66 @@ def normalize_filename(filename):
     
     处理内容：
     1. 提取文件名（如果是路径）
-    2. URL解码（处理%编码的字符）
-    3. Unicode规范化（使用NFC形式，解决中文等字符在不同系统上的表示差异）
-    4. 处理大小写（在不区分大小写的系统上统一使用小写比较）
+    2. 处理路径分隔符（统一使用正斜杠）
+    3. URL解码（处理%编码的字符）
+    4. Unicode规范化（使用NFC形式，解决中文等字符在不同系统上的表示差异）
     5. 处理空白字符（统一处理空格、制表符等）
+    6. 去除文件名两端的空白字符
     """
     logger.debug(f"[normalize_filename] 开始处理文件名: {filename}")
     
-    # 提取文件名（如果是路径）
+    # 处理路径分隔符 - 将反斜杠转换为正斜杠
     original_filename = filename
+    filename = filename.replace('\\', '/')
+    if original_filename != filename:
+        logger.debug(f"[normalize_filename] 路径分隔符转换: {original_filename} -> {filename}")
+    
+    # 提取文件名（如果是路径）
     filename = os.path.basename(filename)
     if original_filename != filename:
         logger.debug(f"[normalize_filename] 提取文件名: {original_filename} -> {filename}")
     
-    # URL解码（处理%编码的字符）
-    try:
-        from urllib.parse import unquote
-        decoded_filename = unquote(filename)
-        if decoded_filename != filename:
-            logger.debug(f"[normalize_filename] URL解码: {filename} -> {decoded_filename}")
-        filename = decoded_filename
-    except Exception as e:
-        logger.warning(f"[normalize_filename] URL解码文件名失败: {filename}, 错误: {str(e)}")
+    # URL解码（处理%编码的字符）- 多次解码以处理双重编码
+    max_decode_attempts = 3
+    for i in range(max_decode_attempts):
+        try:
+            from urllib.parse import unquote
+            decoded_filename = unquote(filename, encoding='utf-8', errors='strict')
+            if decoded_filename == filename:
+                break
+            logger.debug(f"[normalize_filename] URL解码第{i+1}次: {filename} -> {decoded_filename}")
+            filename = decoded_filename
+        except Exception as e:
+            logger.warning(f"[normalize_filename] URL解码文件名失败(第{i+1}次): {filename}, 错误: {str(e)}")
+            break
     
     # Unicode规范化（使用NFC形式）
     try:
         import unicodedata
-        normalized_filename = unicodedata.normalize('NFC', filename)
+        # 先尝试NFD再转NFC，确保一致性
+        filename_nfd = unicodedata.normalize('NFD', filename)
+        normalized_filename = unicodedata.normalize('NFC', filename_nfd)
         if normalized_filename != filename:
             logger.debug(f"[normalize_filename] Unicode规范化: {filename} -> {normalized_filename}")
             # 输出十六进制表示，便于调试Unicode差异
-            logger.debug(f"[normalize_filename] Unicode十六进制 - 原始: {' '.join([hex(ord(c)) for c in filename])}")
-            logger.debug(f"[normalize_filename] Unicode十六进制 - 规范化: {' '.join([hex(ord(c)) for c in normalized_filename])}")
+            logger.debug(f"[normalize_filename] Unicode十六进制 - 原始: {' '.join([hex(ord(c)) for c in filename[:20]])}")
+            logger.debug(f"[normalize_filename] Unicode十六进制 - 规范化: {' '.join([hex(ord(c)) for c in normalized_filename[:20]])}")
         filename = normalized_filename
     except Exception as e:
         logger.warning(f"[normalize_filename] Unicode规范化文件名失败: {filename}, 错误: {str(e)}")
     
-    # 处理空白字符（统一处理空格、制表符等）
-    whitespace_normalized = ' '.join(filename.split())
-    if whitespace_normalized != filename:
-        logger.debug(f"[normalize_filename] 空白字符规范化: {filename} -> {whitespace_normalized}")
-    filename = whitespace_normalized
+    # 处理空白字符（统一多个空格为单个空格）
+    filename = ' '.join(filename.split())
     
     # 去除文件名两端的空白字符
     filename = filename.strip()
+    
+    # 处理Windows文件名末尾的点和空格（Windows会自动删除）
+    while filename.endswith('.') or filename.endswith(' '):
+        old_filename = filename
+        filename = filename.rstrip('. ')
+        if old_filename != filename:
+            logger.debug(f"[normalize_filename] 去除末尾点和空格: {old_filename} -> {filename}")
     
     logger.debug(f"[normalize_filename] 规范化完成: {original_filename} -> {filename}")
     return filename
@@ -761,39 +784,102 @@ def _find_in_map(name):
     在 map 中查找文件，尝试多种匹配策略
     返回找到的音频信息，如果未找到返回 None
     """
-    # 规范化文件名
+    if not name:
+        logger.debug(f"[_find_in_map] 文件名为空")
+        return None
+        
+    logger.debug(f"[_find_in_map] 开始查找文件: {name}")
+    
+    # 尝试多种变体
+    variations = []
+    
+    # 1. 原始文件名
+    variations.append(name)
+    
+    # 2. 规范化文件名
     normalized_name = normalize_filename(name)
+    if normalized_name != name:
+        variations.append(normalized_name)
     
-    # 策略1：直接精确匹配
-    if normalized_name in map:
-        logger.debug(f"[_find_in_map] 精确匹配成功: {normalized_name}")
-        return map[normalized_name]
+    # 3. 小写版本
+    variations.append(name.lower())
+    variations.append(normalized_name.lower())
     
-    # 策略2：小写匹配（非Windows系统）
-    current_os = platform.system()
-    if current_os != 'Windows':
-        lowercase_name = normalized_name.lower()
-        if lowercase_name in map:
-            logger.debug(f"[_find_in_map] 小写匹配成功: {lowercase_name}")
-            return map[lowercase_name]
+    # 4. 处理可能的路径分隔符问题
+    if '\\' in name:
+        name_forward_slash = name.replace('\\', '/')
+        variations.append(os.path.basename(name_forward_slash))
+        variations.append(normalize_filename(name_forward_slash))
     
-    # 策略3：遍历map寻找可能的匹配（用于调试和回退）
-    # 这可以处理一些特殊情况，比如Unicode规范化差异
-    for key, value in map.items():
-        # 比较规范化后的文件名
-        if normalize_filename(key) == normalized_name:
-            logger.debug(f"[_find_in_map] 通过规范化比较找到匹配: {key}")
-            return value
-        # 在非Windows系统上，也尝试小写比较
-        if current_os != 'Windows' and normalize_filename(key).lower() == normalized_name.lower():
-            logger.debug(f"[_find_in_map] 通过小写规范化比较找到匹配: {key}")
-            return value
+    # 5. 尝试URL解码（如果看起来像编码的）
+    if '%' in name:
+        try:
+            from urllib.parse import unquote
+            decoded = unquote(name)
+            variations.append(decoded)
+            variations.append(normalize_filename(decoded))
+        except:
+            pass
+    
+    # 去重
+    seen = set()
+    unique_variations = []
+    for v in variations:
+        if v not in seen and v:
+            seen.add(v)
+            unique_variations.append(v)
+    
+    # 尝试所有变体
+    for variant in unique_variations:
+        if variant in map:
+            logger.debug(f"[_find_in_map] 匹配成功 (变体: {variant}): {name}")
+            return map[variant]
+    
+    # 如果还是没找到，尝试模糊匹配
+    logger.debug(f"[_find_in_map] 精确匹配失败，尝试模糊匹配: {name}")
+    
+    # 计算相似度的简单函数
+    def similarity(s1, s2):
+        s1 = s1.lower()
+        s2 = s2.lower()
+        if s1 == s2:
+            return 1.0
+        # 检查是否一个是另一个的子串
+        if s1 in s2 or s2 in s1:
+            return 0.8
+        # 检查去除扩展名后是否相同
+        s1_base = os.path.splitext(s1)[0]
+        s2_base = os.path.splitext(s2)[0]
+        if s1_base == s2_base:
+            return 0.9
+        return 0
+    
+    # 查找最相似的
+    best_match = None
+    best_score = 0
+    for key in map.keys():
+        score = similarity(normalized_name, key)
+        if score > best_score:
+            best_score = score
+            best_match = key
+    
+    if best_score >= 0.8:
+        logger.debug(f"[_find_in_map] 模糊匹配成功 (相似度: {best_score}, 匹配: {best_match}): {name}")
+        return map[best_match]
     
     # 未找到匹配
-    logger.debug(f"[_find_in_map] 未找到匹配: {name} (规范化: {normalized_name})")
+    logger.warning(f"[_find_in_map] 未找到任何匹配: {name}")
+    logger.debug(f"[_find_in_map] 尝试的变体: {unique_variations}")
+    
     # 输出部分map键用于调试
     map_keys = list(map.keys())[:10] if len(map) > 10 else list(map.keys())
     logger.debug(f"[_find_in_map] map中的前10个键: {map_keys}")
+    
+    # 输出更详细的调试信息
+    if logger.isEnabledFor(10):  # DEBUG level
+        for v in unique_variations[:3]:
+            logger.debug(f"[_find_in_map] 变体 '{v}' 的十六进制: {' '.join([hex(ord(c)) for c in v[:20]])}")
+    
     return None
 
 def hasMusic(name):
