@@ -17,7 +17,7 @@ common:
 
   external_scripts:
     urls:
-    - https://api.ikunshare.top:8000/script?key=KAWANG_bf5f7218-PPPKER0AOWGN8I17
+    - ***
 
 ```
 
