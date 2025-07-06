@@ -12,12 +12,14 @@ import subprocess
 import sys
 from PIL import Image
 import aiohttp
+from aiohttp.web import Response, FileResponse
 from common.utils import createFileMD5, createMD5, timeLengthFormat
 from . import log, config
 import ujson as json
 import traceback
 import mutagen
 import os
+from urllib.parse import quote
 
 logger = log.log('local_music_handler')
 
@@ -318,6 +320,29 @@ def writeLocalCache(audios):
 def dumpLocalCache():
     try:
         TEMP_PATH = config.read_config("common.local_music.temp_path")
+        
+        # 先尝试从 WebDAV 读取
+        if config.read_config('common.webdav_cache.enable'):
+            try:
+                from . import webdav_cache
+                import asyncio
+                webdav_url = webdav_cache.find_webdav_temp_file('meta.json')
+                if webdav_url:
+                    # 同步获取内容
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    content = loop.run_until_complete(webdav_cache.get_webdav_file_content(webdav_url))
+                    if content:
+                        d = json.loads(content.decode('utf-8'))
+                        logger.debug("[dumpLocalCache] 从 WebDAV 读取 meta.json 成功")
+                        return d
+            except Exception as e:
+                logger.debug(f"[dumpLocalCache] 从 WebDAV 读取 meta.json 失败: {e}")
+        
+        # 从本地读取
         with open(TEMP_PATH + '/meta.json', 'r', encoding='utf-8') as f:
             d = json.loads(f.read())
         return d
@@ -400,6 +425,67 @@ async def generateAudioFileResonse(name):
     logger.debug(f"[generateAudioFileResonse] 开始处理音频文件请求: {name}")
     
     try:
+        # 先检查 WebDAV
+        if config.read_config('common.webdav_cache.enable'):
+            try:
+                from . import webdav_cache
+                webdav_url = webdav_cache.find_webdav_local_file(name)
+                if webdav_url:
+                    logger.debug(f"[generateAudioFileResonse] 命中 WebDAV 缓存")
+                    # 检查是否应该代理认证
+                    webdav_config = config.read_config('common.webdav_cache')
+                    proxy_auth = config.read_config('common.webdav_cache.proxy_auth')
+                    direct_url = config.read_config('common.webdav_cache.direct_url')
+                    
+                    # 如果启用了代理认证，则代理内容
+                    if proxy_auth:
+                        # 检查URL是否已包含认证信息
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(webdav_url)
+                        
+                        headers = {}
+                        # 只有当URL中没有认证信息时，才添加Authorization头
+                        if not (parsed_url.username and parsed_url.password):
+                            if webdav_config.get('username') and webdav_config.get('password'):
+                                import base64
+                                credentials = base64.b64encode(f"{webdav_config['username']}:{webdav_config['password']}".encode()).decode()
+                                headers['Authorization'] = f"Basic {credentials}"
+                        
+                        # 获取WebDAV内容并返回
+                        from . import variable
+                        try:
+                            async with variable.aioSession.get(webdav_url, headers=headers) as resp:
+                                if resp.status == 200:
+                                    content = await resp.read()
+                                    content_type = resp.headers.get('Content-Type', 'audio/mpeg')
+                                    logger.debug(f"[generateAudioFileResonse] WebDAV 代理成功，返回 {len(content)} 字节")
+                                    return Response(body=content, content_type=content_type)
+                                else:
+                                    logger.warning(f"WebDAV代理获取失败: {resp.status}")
+                        except Exception as e:
+                            logger.error(f"WebDAV代理异常: {e}")
+                    elif direct_url:
+                        # 直接返回一个内部代理URL，避免302重定向
+                        from urllib.parse import quote
+                        encoded_url = quote(webdav_url, safe='')
+                        proxy_url = f"/webdav-proxy?url={encoded_url}"
+                        logger.debug(f"[generateAudioFileResonse] 返回内部代理URL: {proxy_url}")
+                        
+                        # 直接重定向到内部代理URL，这样前端就像访问本地文件一样
+                        return Response(
+                            status=302,
+                            headers={'Location': proxy_url}
+                        )
+                    else:
+                        # 返回302重定向 (fallback)
+                        logger.debug(f"[generateAudioFileResonse] 返回302重定向到: {webdav_url}")
+                        return Response(
+                            status=302,
+                            headers={'Location': webdav_url}
+                        )
+            except Exception:
+                logger.debug(f"[generateAudioFileResonse] WebDAV 检查失败，继续本地处理")
+        
         # 使用辅助函数查找文件
         audio_info = _find_in_map(name)
         
@@ -442,7 +528,7 @@ async def generateAudioFileResonse(name):
         
         # 返回文件响应
         logger.debug(f"[generateAudioFileResonse] 返回文件响应: {filepath}")
-        return aiohttp.web.FileResponse(filepath)
+        return FileResponse(filepath)
     except (KeyError, TypeError) as e:
         logger.error(f"获取音频文件时出现KeyError或TypeError: {str(e)}")
         return {
@@ -663,6 +749,22 @@ def checkLocalMusic(name):
     logger.debug(f"[checkLocalMusic] 开始检查音乐资源: {name}")
     
     try:
+        # 先检查 WebDAV
+        if config.read_config('common.webdav_cache.enable'):
+            try:
+                from . import webdav_cache
+                webdav_file = webdav_cache.find_webdav_local_file(name)
+                if webdav_file:
+                    # WebDAV 中的本地音乐通常没有单独的封面和歌词文件
+                    # 但可以尝试从 temp 目录读取缓存的元数据
+                    return {
+                        'file': True,
+                        'cover': False,  # 本地音乐的封面通常嵌入在文件中
+                        'lyric': False   # 本地音乐的歌词通常嵌入在文件中或同名.lrc文件
+                    }
+            except Exception:
+                logger.debug(f"[checkLocalMusic] WebDAV 检查失败，继续本地检查")
+        
         # 使用辅助函数查找文件
         w = _find_in_map(name)
         
@@ -891,6 +993,17 @@ def hasMusic(name):
     if not name:
         logger.debug(f"[hasMusic] 文件名为空，返回False")
         return False
+    
+    # 先检查 WebDAV
+    if config.read_config('common.webdav_cache.enable'):
+        try:
+            from . import webdav_cache
+            webdav_url = webdav_cache.find_webdav_local_file(name)
+            if webdav_url:
+                logger.debug(f"[hasMusic] 在 WebDAV 中找到文件: {name}")
+                return True
+        except Exception:
+            logger.debug(f"[hasMusic] WebDAV 检查失败，继续本地检查")
     
     # 使用辅助函数查找文件
     audio_info = _find_in_map(name)

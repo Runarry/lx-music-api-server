@@ -80,10 +80,9 @@ const createUrlSafeBase64 = (data) => {
  */
 const handleGetMusicUrl = async (source, musicInfo, quality) => {
   if (source == 'local') {
-    if (!musicInfo.songmid.startsWith('server_')) throw new Error('upsupported local file')
     const songId = musicInfo.songmid
     const requestBody = {
-      p: songId.replace('server_', ''),
+      p: songId,
     }
     var t = 'c'
     var b = createUrlSafeBase64(requestBody)
@@ -151,10 +150,9 @@ const handleGetMusicPic = async (source, musicInfo) => {
   switch (source) {
     case 'local':
       // 先从服务器检查是否有对应的类型，再响应链接
-      if (!musicInfo.songmid.startsWith('server_')) throw new Error('upsupported local file')
       const songId = musicInfo.songmid
       const requestBody = {
-        p: songId.replace('server_', ''),
+        p: songId,
       }
       var t = 'c'
       var b = createUrlSafeBase64(requestBody)
@@ -182,10 +180,9 @@ const handleGetMusicPic = async (source, musicInfo) => {
 const handleGetMusicLyric = async (source, musicInfo) => {
   switch (source) {
     case 'local':
-      if (!musicInfo.songmid.startsWith('server_')) throw new Error('upsupported local file')
       const songId = musicInfo.songmid
       const requestBody = {
-        p: songId.replace('server_', ''),
+        p: songId,
       }
       var t = 'c'
       var b = createUrlSafeBase64(requestBody)

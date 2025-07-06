@@ -37,7 +37,9 @@ from common import variable
 from common import scheduler
 from common import lx_script
 from common import gcsp
+from common import webdav_cache
 import modules
+import base64
 
 def handleResult(dic, status=200) -> Response:
     if (not isinstance(dic, dict)):
@@ -224,12 +226,153 @@ async def handle_cache_file(request):
         return FileResponse(path)
     return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
 
+# WebDAV 代理处理
+async def handle_webdav_proxy(request):
+    """代理 WebDAV 请求，添加认证头"""
+    source = request.match_info.get('source')
+    song_id = request.match_info.get('songId')
+    quality = request.match_info.get('quality')
+    
+    # 特殊处理 local 文件
+    if source == 'local':
+        # local 文件的 song_id 是文件名，quality 是文件类型（file/cover/lyric）
+        from urllib.parse import unquote
+        filename = unquote(song_id)
+        webdav_url = webdav_cache.find_webdav_local_file(filename)
+    # 特殊处理封面请求
+    elif quality == 'cover':
+        webdav_url = webdav_cache.find_webdav_cover(source, song_id)
+    else:
+        # 查找 WebDAV URL
+        webdav_url = webdav_cache.find_webdav_cached_file(source, song_id, quality)
+    
+    if not webdav_url:
+        return handleResult({'code': 6, 'msg': '未找到您所请求的资源', 'data': None}, 404)
+    
+    # 检查URL是否已包含认证信息
+    from urllib.parse import urlparse
+    parsed_url = urlparse(webdav_url)
+    
+    webdav_config = config.read_config('common.webdav_cache')
+    headers = {}
+    # 只有当URL中没有认证信息时，才添加Authorization头
+    if not (parsed_url.username and parsed_url.password):
+        if webdav_config.get('username') and webdav_config.get('password'):
+            credentials = base64.b64encode(f"{webdav_config['username']}:{webdav_config['password']}".encode()).decode()
+            headers['Authorization'] = f"Basic {credentials}"
+    
+    try:
+        async with variable.aioSession.get(
+            webdav_url, 
+            headers=headers, 
+            ssl=webdav_config.get('ssl_verify', True),
+            timeout=aiohttp.ClientTimeout(total=webdav_config.get('timeout', 30))
+        ) as resp:
+            # 流式响应
+            response = StreamResponse(status=resp.status)
+            # 复制必要的响应头
+            if 'Content-Type' in resp.headers:
+                response.headers['Content-Type'] = resp.headers['Content-Type']
+            if 'Content-Length' in resp.headers:
+                response.headers['Content-Length'] = resp.headers['Content-Length']
+            if 'Content-Disposition' in resp.headers:
+                response.headers['Content-Disposition'] = resp.headers['Content-Disposition']
+            # 添加 CORS 头
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            await response.prepare(request)
+            
+            async for chunk in resp.content.iter_chunked(8192):
+                await response.write(chunk)
+            
+            await response.write_eof()
+            return response
+    except aiohttp.ClientError as e:
+        logger.error(f"WebDAV 代理网络请求失败: {e}")
+        return handleResult({'code': 4, 'msg': 'WebDAV 服务器连接失败', 'data': None}, 502)
+    except asyncio.TimeoutError:
+        logger.error("WebDAV 代理请求超时")
+        return handleResult({'code': 4, 'msg': 'WebDAV 服务器响应超时', 'data': None}, 504)
+    except Exception as e:
+        logger.error(f"WebDAV 代理请求失败: {e}")
+        logger.error(traceback.format_exc())
+        return handleResult({'code': 4, 'msg': '内部服务器错误', 'data': None}, 500)
+
+async def handle_webdav_url_proxy(request):
+    """代理 WebDAV URL 请求（for direct_url mode）"""
+    try:
+        # 获取编码的URL参数
+        encoded_url = request.query.get('url')
+        if not encoded_url:
+            return handleResult({'code': 2, 'msg': '缺少url参数', 'data': None}, 400)
+        
+        # 解码URL
+        from urllib.parse import unquote
+        webdav_url = unquote(encoded_url)
+        
+        # 检查URL是否已包含认证信息
+        from urllib.parse import urlparse, urlunparse
+        parsed_url = urlparse(webdav_url)
+        
+        headers = {}
+        auth_username = None
+        auth_password = None
+        
+        # 如果URL中包含认证信息，提取并移除
+        if parsed_url.username and parsed_url.password:
+            auth_username = parsed_url.username
+            auth_password = parsed_url.password
+            # 重建URL，移除认证信息
+            clean_netloc = parsed_url.hostname
+            if parsed_url.port:
+                clean_netloc += f":{parsed_url.port}"
+            clean_url_parts = (
+                parsed_url.scheme,
+                clean_netloc,
+                parsed_url.path,
+                parsed_url.params,
+                parsed_url.query,
+                parsed_url.fragment
+            )
+            webdav_url = urlunparse(clean_url_parts)
+        else:
+            # 如果URL中没有认证信息，从配置中获取
+            webdav_config = config.read_config('common.webdav_cache')
+            auth_username = webdav_config.get('username')
+            auth_password = webdav_config.get('password')
+        
+        # 设置Authorization头
+        if auth_username and auth_password:
+            import base64
+            credentials = base64.b64encode(f"{auth_username}:{auth_password}".encode()).decode()
+            headers['Authorization'] = f"Basic {credentials}"
+        
+        # 代理请求到WebDAV
+        async with variable.aioSession.get(webdav_url, headers=headers) as resp:
+            if resp.status == 200:
+                content = await resp.read()
+                content_type = resp.headers.get('Content-Type', 'audio/mpeg')
+                return Response(body=content, content_type=content_type)
+            else:
+                logger.warning(f"WebDAV URL代理失败: {resp.status}")
+                return handleResult({'code': 4, 'msg': f'WebDAV请求失败: {resp.status}', 'data': None}, resp.status)
+    
+    except Exception as e:
+        logger.error(f"WebDAV URL 代理请求失败: {e}")
+        logger.error(traceback.format_exc())
+        return handleResult({'code': 4, 'msg': '内部服务器错误', 'data': None}, 500)
+
 app = Application(middlewares=[handle_before_request])
 utils.setGlobal(app, "app")
 
 # 缓存文件访问路由需要放在通配符路由之前
 app.router.add_get('/', main)
 app.router.add_get('/cache/{filename}', handle_cache_file)
+
+# WebDAV 代理路由
+app.router.add_get('/webdav/{source}/{songId}/{quality}', handle_webdav_proxy)
+
+# WebDAV URL 代理路由 (for direct_url mode)
+app.router.add_get('/webdav-proxy', handle_webdav_url_proxy)
 
 # 动态 API 路由
 app.router.add_get('/{method}/{source}/{songId}/{quality}', handle)
@@ -338,6 +481,17 @@ async def initMain():
     except Exception:
         logger.warning('刷新外部脚本失败\n' + traceback.format_exc())
     localMusic.initMain()
+    
+    # 初始化 WebDAV 索引
+    if config.read_config('common.webdav_cache.enable'):
+        if config.read_config('common.webdav_cache.index_on_startup'):
+            try:
+                await webdav_cache.init_webdav_index()
+                # 启动定期刷新任务
+                asyncio.create_task(webdav_cache.refresh_webdav_index())
+            except Exception:
+                logger.warning('初始化 WebDAV 索引失败\n' + traceback.format_exc())
+    
     try:
         await run_app()
         logger.info("服务器启动成功，请按下Ctrl + C停止")

@@ -24,6 +24,8 @@ from common import utils
 import sys  # 已存在? modules顶部有traceback, time, but not sys. ensure imported
 import collections
 import aiofiles
+import time
+import threading
 
 # 导入外部脚本模块
 from . import external_script
@@ -103,11 +105,62 @@ def _update_cache_index(source: str, song_id: str, quality: str, filepath: str):
 _inflight_meta: set[tuple[str, str]] = set()
 _inflight_meta_lock = asyncio.Lock()
 
+# ---------------- File locks for metadata embedding ----------------
+_file_locks: dict[str, threading.Lock] = {}
+_file_locks_lock = threading.Lock()
+
 async def url(source, songId, quality, query={}):
     # ❗ 为保证酷狗(Kugou)源的歌曲 ID 与磁盘/缓存中的命名一致，统一转为小写。
     #   之前的实现是在本地文件检查之后才转换，导致相同歌曲无法命中缓存。
     if source == "kg":
         songId = songId.lower()
+
+    # —— WebDAV 缓存预检查（最高优先级）——
+    if config.read_config('common.webdav_cache.enable'):
+        try:
+            from common import webdav_cache
+            webdav_url = webdav_cache.find_webdav_cached_file(source, songId, quality)
+            if webdav_url:
+                logger.debug(f"命中 WebDAV 缓存: {webdav_url}")
+                # 确保异步获取元数据
+                asyncio.create_task(_ensure_metadata_cached(source, songId))
+                
+                # 如果需要代理认证，返回代理 URL
+                if config.read_config('common.webdav_cache.proxy_auth') and not config.read_config('common.webdav_cache.direct_url'):
+                    # 返回服务器代理 URL
+                    proxy_url = f"/webdav/{source}/{songId}/{quality}"
+                    return {
+                        "code": 0,
+                        "msg": "success",
+                        "data": proxy_url,
+                        "extra": {
+                            "cache": True,
+                            "quality": {
+                                "target": quality,
+                                "result": quality,
+                            },
+                            "localfile": True,
+                            "webdav": True,
+                        },
+                    }
+                else:
+                    # 直接返回 WebDAV URL
+                    return {
+                        "code": 0,
+                        "msg": "success",
+                        "data": webdav_url,
+                        "extra": {
+                            "cache": True,
+                            "quality": {
+                                "target": quality,
+                                "result": quality,
+                            },
+                            "localfile": True,
+                            "webdav": True,
+                        },
+                    }
+        except Exception:
+            logger.debug("WebDAV 缓存检查失败\n" + traceback.format_exc())
 
     # —— 优先处理客户端内嵌的 info / lyric 缓存 ——
     try:
@@ -452,6 +505,9 @@ async def _download_audio_to_cache(url: str, filepath: str, source: str, song_id
 
             logger.info(f"音频缓存完成: {filepath}")
 
+            # 添加短暂延迟，确保文件句柄完全释放
+            await asyncio.sleep(0.5)
+            
             # 下载完成后嵌入元数据（若可用）
             try:
                 info_cache = config.getCache("info", f"{source}_{song_id}")
@@ -504,45 +560,95 @@ def _embed_metadata(filepath: str, info: dict | None, cover_path: str | None, ly
     """将歌曲信息、歌词、封面写入音频文件元数据。支持 mp3 / flac。"""
     if not info:
         return
-    try:
-        logger.debug(f"[meta] embedding tags into {os.path.basename(filepath)}")
-        if filepath.lower().endswith('.mp3'):
+    
+    # 获取或创建文件锁
+    with _file_locks_lock:
+        if filepath not in _file_locks:
+            _file_locks[filepath] = threading.Lock()
+        file_lock = _file_locks[filepath]
+    
+    # 使用文件锁确保独占访问
+    with file_lock:
+        try:
+            # 验证文件存在且可读
+            if not os.path.exists(filepath):
+                logger.warning(f"[meta] 文件不存在: {filepath}")
+                return
+            
+            # 验证文件大小
+            file_size = os.path.getsize(filepath)
+            if file_size == 0:
+                logger.warning(f"[meta] 文件为空: {filepath}")
+                return
+            
+            # 验证音频文件完整性
             try:
-                audio = ID3(filepath)
-            except mutagen.id3.ID3NoHeaderError:
-                audio = ID3()
-            # 标题、艺术家、专辑
-            audio.add(TIT2(encoding=3, text=info.get('name') or info.get('name_ori', '')))
-            audio.add(TPE1(encoding=3, text=info.get('singer', '')))
-            audio.add(TALB(encoding=3, text=info.get('album', '')))
-            # 歌词
-            if lyric_content:
-                audio.add(USLT(encoding=3, text=lyric_content))
-            # 封面
-            if cover_path and os.path.exists(cover_path):
-                with open(cover_path, 'rb') as img_f:
-                    audio.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=img_f.read()))
-            audio.save(filepath)
-        elif filepath.lower().endswith('.flac'):
-            audio = FLAC(filepath)
-            audio['title'] = info.get('name') or info.get('name_ori', '')
-            audio['artist'] = info.get('singer', '')
-            audio['album'] = info.get('album', '')
-            # 歌词
-            if lyric_content:
-                audio['lyrics'] = lyric_content
-            # 封面
-            if cover_path and os.path.exists(cover_path):
-                pic = Picture()
-                with open(cover_path, 'rb') as img_f:
-                    pic.data = img_f.read()
-                pic.type = 3
-                pic.mime = 'image/jpeg'
-                audio.clear_pictures()
-                audio.add_picture(pic)
-            audio.save()
-    except Exception:
-        logger.debug("embed metadata error\n" + traceback.format_exc())
+                if filepath.lower().endswith('.mp3'):
+                    # 尝试读取 MP3 文件头部，验证文件完整性
+                    test_audio = mutagen.File(filepath)
+                    if test_audio is None:
+                        logger.warning(f"[meta] 无法识别的音频文件: {filepath}")
+                        return
+                elif filepath.lower().endswith('.flac'):
+                    # 尝试读取 FLAC 文件，验证文件完整性
+                    test_audio = FLAC(filepath)
+                else:
+                    # 尝试使用 mutagen 自动检测格式
+                    test_audio = mutagen.File(filepath)
+                    if test_audio is None:
+                        logger.warning(f"[meta] 不支持的音频格式: {filepath}")
+                        return
+            except Exception as e:
+                logger.warning(f"[meta] 音频文件验证失败: {filepath}, 错误: {e}")
+                return
+            
+            logger.debug(f"[meta] embedding tags into {os.path.basename(filepath)}")
+            
+            if filepath.lower().endswith('.mp3'):
+                try:
+                    audio = ID3(filepath)
+                except mutagen.id3.ID3NoHeaderError:
+                    audio = ID3()
+                # 标题、艺术家、专辑
+                audio.add(TIT2(encoding=3, text=info.get('name') or info.get('name_ori', '')))
+                audio.add(TPE1(encoding=3, text=info.get('singer', '')))
+                audio.add(TALB(encoding=3, text=info.get('album', '')))
+                # 歌词
+                if lyric_content:
+                    audio.add(USLT(encoding=3, text=lyric_content))
+                # 封面
+                if cover_path and os.path.exists(cover_path):
+                    with open(cover_path, 'rb') as img_f:
+                        audio.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=img_f.read()))
+                audio.save(filepath)
+            elif filepath.lower().endswith('.flac'):
+                audio = FLAC(filepath)
+                audio['title'] = info.get('name') or info.get('name_ori', '')
+                audio['artist'] = info.get('singer', '')
+                audio['album'] = info.get('album', '')
+                # 歌词
+                if lyric_content:
+                    audio['lyrics'] = lyric_content
+                # 封面
+                if cover_path and os.path.exists(cover_path):
+                    pic = Picture()
+                    with open(cover_path, 'rb') as img_f:
+                        pic.data = img_f.read()
+                    pic.type = 3
+                    pic.mime = 'image/jpeg'
+                    audio.clear_pictures()
+                    audio.add_picture(pic)
+                audio.save()
+            else:
+                # 对于其他格式，记录日志但不尝试嵌入元数据
+                logger.info(f"[meta] 跳过非 MP3/FLAC 格式的元数据嵌入: {filepath}")
+        except Exception:
+            logger.debug("embed metadata error\n" + traceback.format_exc())
+        finally:
+            # 清理文件锁（可选，避免内存泄漏）
+            with _file_locks_lock:
+                if filepath in _file_locks and not _file_locks[filepath].locked():
+                    del _file_locks[filepath]
 
 # Helper to build cache file path based on naming rule
 def _find_cached_file(source: str, song_id: str, quality: str):
@@ -597,8 +703,27 @@ async def _ensure_metadata_cached(source: str, song_id: str):
             except Exception:
                 logger.debug(f"获取 lyric 失败: {source} {song_id}\n" + traceback.format_exc())
 
-        # 下载封面
-        if info_data and info_data.get("cover"):
+        # 检查 WebDAV 封面
+        webdav_cover_checked = False
+        if config.read_config('common.webdav_cache.enable'):
+            try:
+                from common import webdav_cache
+                webdav_cover_url = webdav_cache.find_webdav_cover(source, song_id)
+                if webdav_cover_url:
+                    # 如果 WebDAV 有封面，更新 info 缓存
+                    if info_data:
+                        if config.read_config('common.webdav_cache.proxy_auth') and not config.read_config('common.webdav_cache.direct_url'):
+                            info_data["cover"] = f"/webdav/{source}/{song_id}/cover"
+                        else:
+                            info_data["cover"] = webdav_cover_url
+                        config.updateCache("info", info_key, {"expire": False, "time": 0, "data": info_data})
+                    webdav_cover_checked = True
+                    logger.debug(f"使用 WebDAV 封面: {source}_{song_id}")
+            except Exception:
+                logger.debug("检查 WebDAV 封面失败\n" + traceback.format_exc())
+        
+        # 下载封面（如果 WebDAV 没有封面）
+        if not webdav_cover_checked and info_data and info_data.get("cover"):
             cover_url = info_data["cover"]
             ext = os.path.splitext(cover_url.split("?")[0])[1] or ".jpg"
             cover_filename = f"{source}_{song_id}_cover{ext}"
@@ -644,14 +769,3 @@ async def _ensure_metadata_cached(source: str, song_id: str):
 # 目录 ./external_scripts 用于缓存下载的脚本文件
 _ext_script_dir = os.path.join(variable.workdir, 'external_scripts')
 os.makedirs(_ext_script_dir, exist_ok=True)
-
-# 这些函数已移动到 external_script.py 模块中
-# 保留目录创建代码以确保向后兼容
-
-
-# 外部脚本相关函数已移动到 external_script.py 模块中
-
-
-# 外部脚本相关函数已移动到 external_script.py 模块中
-
-# 外部脚本相关内容已移动到 external_script.py 模块中

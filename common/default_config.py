@@ -55,6 +55,25 @@ common:
   remote_cache:
     enable: true           # 是否开启远端音频下载缓存
     path: ./cache_audio    # 缓存文件保存目录
+  # WebDAV 缓存配置
+  webdav_cache:
+    enable: false                    # 是否启用 WebDAV 缓存
+    url: "https://example.com/dav"   # WebDAV 服务器地址
+    username: ""                     # WebDAV 用户名
+    password: ""                     # WebDAV 密码
+    # 目录路径配置（与本地缓存结构保持一致）
+    paths:
+      audio: "/cache_audio"          # 音频缓存目录（对应 remote_cache.path）
+      local: "/audio"                # 本地音乐目录（对应 local_music.audio_path）
+      temp: "/temp"                  # 临时文件目录（对应 local_music.temp_path）
+    ssl_verify: true                 # 是否验证 SSL 证书
+    timeout: 30                      # 连接超时时间（秒）
+    # 缓存索引配置
+    index_on_startup: true           # 启动时是否构建索引
+    index_refresh_interval: 3600     # 索引刷新间隔（秒）
+    # URL 生成配置
+    direct_url: false                # 是否生成直接访问 URL（包含认证信息）
+    proxy_auth: true                 # 是否通过服务器代理认证请求
   # 缓存配置
   cache:
     # 适配器 [redis,sql]

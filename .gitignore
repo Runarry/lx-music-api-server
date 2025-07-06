@@ -53,3 +53,4 @@ external_scripts
 test_output
 !common/natives/qdes.cp313-win_amd64.pyd
 temp/
+.claude
