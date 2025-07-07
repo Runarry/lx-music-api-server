@@ -125,9 +125,12 @@ async def url(source, songId, quality, query={}):
                 # 确保异步获取元数据
                 asyncio.create_task(_ensure_metadata_cached(source, songId))
                 
-                # 如果需要代理认证，返回代理 URL
-                if config.read_config('common.webdav_cache.proxy_auth') and not config.read_config('common.webdav_cache.direct_url'):
-                    # 返回服务器代理 URL
+                # 根据配置决定返回方式
+                proxy_auth = config.read_config('common.webdav_cache.proxy_auth')
+                direct_url = config.read_config('common.webdav_cache.direct_url')
+                
+                if proxy_auth and not direct_url:
+                    # proxy_auth模式：返回标准代理 URL
                     proxy_url = f"/webdav/{source}/{songId}/{quality}"
                     return {
                         "code": 0,
@@ -143,8 +146,30 @@ async def url(source, songId, quality, query={}):
                             "webdav": True,
                         },
                     }
+                elif direct_url:
+                    # direct_url模式：返回内部代理URL（避免前端无法播放）
+                    # 使用与local_audio相同的处理方式
+                    from urllib.parse import quote
+                    encoded_url = quote(webdav_url, safe='')
+                    proxy_url = f"/webdav-proxy?url={encoded_url}"
+                    logger.debug(f"WebDAV缓存命中，返回内部代理URL: {proxy_url}")
+                    return {
+                        "code": 0,
+                        "msg": "success",
+                        "data": proxy_url,
+                        "extra": {
+                            "cache": True,
+                            "quality": {
+                                "target": quality,
+                                "result": quality,
+                            },
+                            "localfile": True,
+                            "webdav": True,
+                            "proxy_mode": "webdav-proxy",  # 标记使用了内部代理
+                        },
+                    }
                 else:
-                    # 直接返回 WebDAV URL
+                    # 默认：直接返回 WebDAV URL（fallback）
                     return {
                         "code": 0,
                         "msg": "success",
